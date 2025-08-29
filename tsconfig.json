@@ -5,5 +5,5 @@
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true
   },
-  "exclude": ["apps", "packages"]
+  "exclude": ["apps", "packages" ]
 }
