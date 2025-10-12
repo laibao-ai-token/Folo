@@ -9,26 +9,29 @@ import { useFeedById } from "@follow/store/feed/hooks"
 import { useWhoami } from "@follow/store/user/hooks"
 import { stopPropagation } from "@follow/utils/dom"
 import { cn, isBizId } from "@follow/utils/utils"
+import { useAtomValue } from "jotai"
 import type { FC } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router"
 
 import { previewBackPath } from "~/atoms/preview"
 import { useGeneralSettingKey } from "~/atoms/settings/general"
-import { useTimelineColumnShow } from "~/atoms/sidebar"
+import { useSubscriptionColumnShow } from "~/atoms/sidebar"
 import { ROUTE_ENTRY_PENDING } from "~/constants"
 import { useFeature } from "~/hooks/biz/useFeature"
 import { useFollow } from "~/hooks/biz/useFollow"
 import { getRouteParams, useRouteParams } from "~/hooks/biz/useRouteParams"
 import { COMMAND_ID } from "~/modules/command/commands/id"
 import { useRunCommandFn } from "~/modules/command/hooks/use-command"
-import { useCommandShortcuts } from "~/modules/command/hooks/use-command-binding"
+import { useCommandShortcut } from "~/modules/command/hooks/use-command-binding"
 import { EntryHeader } from "~/modules/entry-content/components/entry-header"
+import { FeedIcon } from "~/modules/feed/feed-icon"
 import { useRefreshFeedMutation } from "~/queries/feed"
-import { useFeedHeaderTitle } from "~/store/feed/hooks"
+import { useFeedHeaderIcon, useFeedHeaderTitle } from "~/store/feed/hooks"
 
 import { MarkAllReadButton } from "../components/mark-all-button"
 import { useIsPreviewFeed } from "../hooks/useIsPreviewFeed"
+import { useEntryRootState } from "../store/EntryColumnContext"
 import { AppendTaildingDivider } from "./AppendTaildingDivider"
 import { SwitchToMasonryButton } from "./buttons/SwitchToMasonryButton"
 import { WideModeButton } from "./buttons/WideModeButton"
@@ -47,9 +50,11 @@ export const EntryListHeader: FC<{
   const isPreview = useIsPreviewFeed()
 
   const headerTitle = useFeedHeaderTitle()
+  const feedIcon = useFeedHeaderIcon()
 
   const titleInfo = !!headerTitle && (
     <div className="flex min-w-0 items-center break-all text-lg font-bold leading-tight">
+      {feedIcon && <FeedIcon target={feedIcon} fallback size={20} />}
       <EllipsisHorizontalTextWithTooltip className="inline-block !w-auto max-w-full">
         {headerTitle}
       </EllipsisHorizontalTextWithTooltip>
@@ -62,42 +67,58 @@ export const EntryListHeader: FC<{
 
   const feed = useFeedById(feedId)
 
-  const titleStyleBasedView = ["pl-6", "pl-7", "pl-7", "pl-7", "px-5", "pl-6"]
-  const feedColumnShow = useTimelineColumnShow()
-  const commandShortcuts = useCommandShortcuts()
+  const titleStyleBasedView = {
+    [FeedViewType.All]: "pl-7",
+    [FeedViewType.Articles]: "pl-7",
+    [FeedViewType.Pictures]: "pl-7",
+    [FeedViewType.Videos]: "pl-7",
+    [FeedViewType.SocialMedia]: "px-5",
+    [FeedViewType.Audios]: "pl-6",
+    [FeedViewType.Notifications]: "pl-6",
+  }
+
+  const feedColumnShow = useSubscriptionColumnShow()
+  const toggleUnreadOnlyShortcut = useCommandShortcut(COMMAND_ID.timeline.unreadOnly)
   const runCmdFn = useRunCommandFn()
 
   const aiEnabled = useFeature("ai")
+  const { isScrolledBeyondThreshold } = useEntryRootState()
+  const isScrolledBeyondThresholdValue = useAtomValue(isScrolledBeyondThreshold)
   return (
     <div
       className={cn(
-        "flex w-full flex-col pr-4 pt-2.5",
+        "h-top-header-with-border-b flex w-full flex-col pr-4 pt-2.5",
         !feedColumnShow && "macos:mt-4 macos:pt-margin-macos-traffic-light-y",
         titleStyleBasedView[view],
         isPreview && "px-4",
+        view === FeedViewType.All &&
+          "data-[scrolled-beyond-threshold=true]:border-b-border border-b border-transparent",
       )}
+      data-scrolled-beyond-threshold={isScrolledBeyondThresholdValue}
     >
       <div className={"flex w-full justify-between"}>
         {isPreview ? <PreviewHeaderInfoWrapper>{titleInfo}</PreviewHeaderInfoWrapper> : titleInfo}
         {!isPreview && (
           <div
             className={cn(
-              "text-text-secondary relative z-[1] flex items-center gap-1 self-baseline",
+              "text-text-secondary relative z-[1] flex items-center gap-2 self-baseline",
               !headerTitle && "opacity-0 [&_*]:!pointer-events-none",
 
               "translate-x-[6px]",
             )}
             onClick={stopPropagation}
           >
-            {views[view]!.wideMode && entryId && entryId !== ROUTE_ENTRY_PENDING && !aiEnabled && (
-              <>
-                <EntryHeader entryId={entryId} />
-                <DividerVertical className="mx-2 w-px" />
-              </>
-            )}
+            {views.find((v) => v.view === view)?.wideMode &&
+              entryId &&
+              entryId !== ROUTE_ENTRY_PENDING && (
+                <>
+                  <EntryHeader entryId={entryId} />
+                  <DividerVertical className="mx-2 w-px" />
+                </>
+              )}
 
             <AppendTaildingDivider>
-              {!views[view]!.wideMode && !aiEnabled && <WideModeButton />}
+              {!views.find((v) => v.view === view)?.wideMode && !aiEnabled && <WideModeButton />}
               {view === FeedViewType.Pictures && <SwitchToMasonryButton />}
             </AppendTaildingDivider>
 
@@ -138,7 +159,7 @@ export const EntryListHeader: FC<{
                       ? t("entry_list_header.show_unread_only")
                       : t("entry_list_header.show_all")
                   }
-                  shortcut={commandShortcuts[COMMAND_ID.timeline.unreadOnly]}
+                  shortcut={toggleUnreadOnlyShortcut}
                   onClick={() => runCmdFn(COMMAND_ID.timeline.unreadOnly, [!unreadOnly])()}
                 >
                   {unreadOnly ? (

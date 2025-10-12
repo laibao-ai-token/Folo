@@ -1,9 +1,11 @@
 import type { AsyncDb } from "@follow/database/db"
 import { db } from "@follow/database/db"
+import type { AiChatMessagesModel } from "@follow/database/schemas/index"
 import { aiChatMessagesTable, aiChatTable } from "@follow/database/schemas/index"
 import { asc, count, eq, inArray, sql } from "drizzle-orm"
 
-import type { BizUIMessage } from "../store/types"
+import type { BizUIMessage, BizUIMessagePart } from "../store/types"
+import { isDataBlockPart, isFileAttachmentBlock } from "../utils/extractor"
 
 class AIPersistServiceStatic {
   // Cache for session existence to avoid repeated queries
@@ -26,7 +28,7 @@ class AIPersistServiceStatic {
     }
   }
 
-  async loadMessages(chatId: string) {
+  async loadMessages(chatId: string): Promise<AiChatMessagesModel[]> {
     return db.query.aiChatMessagesTable.findMany({
       where: eq(aiChatMessagesTable.chatId, chatId),
       orderBy: [asc(aiChatMessagesTable.createdAt)],
@@ -36,26 +38,16 @@ class AIPersistServiceStatic {
   /**
    * Convert enhanced database message to BizUIMessage format for compatibility
    */
-  private convertToUIMessage(dbMessage: any): BizUIMessage {
-    // Reconstruct UIMessage from database fields
+  private convertToUIMessage(dbMessage: AiChatMessagesModel): BizUIMessage {
     const uiMessage: BizUIMessage = {
       id: dbMessage.id,
       role: dbMessage.role,
-      parts: [], // AI SDK v5 uses parts array
+      createdAt: dbMessage.createdAt,
+      parts: [],
     }
 
-    // Add parts based on content format and data
     if (dbMessage.messageParts && dbMessage.messageParts.length > 0) {
-      // For assistant messages with complex parts (tools, reasoning, etc)
-      uiMessage.parts = dbMessage.messageParts
-    } else {
-      // For simple text messages, create a text part
-      uiMessage.parts = [
-        {
-          type: "text",
-          text: dbMessage.content,
-        },
-      ]
+      uiMessage.parts = dbMessage.messageParts as any[] as BizUIMessagePart[]
     }
 
     return uiMessage
@@ -94,49 +86,9 @@ class AIPersistServiceStatic {
     return { session, messages }
   }
 
-  async insertMessages(chatId: string, messages: BizUIMessage[]) {
-    if (messages.length === 0) {
-      return
-    }
-
-    await db
-      .insert(aiChatMessagesTable)
-      .values(
-        messages.map((message) => {
-          // Store parts as-is since they're stored as JSON and the UI can handle them
-          const convertedParts = message.parts as any[]
-
-          return {
-            id: message.id,
-            chatId,
-            role: message.role,
-            contentFormat: "plaintext" as const,
-
-            createdAt: new Date(),
-            status: "completed" as const,
-            finishedAt: message.metadata?.finishTime
-              ? new Date(message.metadata.finishTime)
-              : undefined,
-            messageParts: convertedParts,
-            metadata: message.metadata,
-          } as typeof aiChatMessagesTable.$inferInsert
-        }),
-      )
-      .onConflictDoUpdate({
-        target: [aiChatMessagesTable.id],
-        set: {
-          messageParts: sql`excluded.message_parts`,
-          metadata: sql`excluded.metadata`,
-          finishedAt: sql`excluded.finished_at`,
-          createdAt: sql`excluded.created_at`,
-          status: sql`excluded.status`,
-        },
-      })
-  }
-
   async replaceAllMessages(chatId: string, messages: BizUIMessage[]) {
     await db.delete(aiChatMessagesTable).where(eq(aiChatMessagesTable.chatId, chatId))
-    await this.insertMessages(chatId, messages)
+    await this.upsertMessages(chatId, messages)
   }
 
   /**
@@ -151,27 +103,45 @@ class AIPersistServiceStatic {
     // Ensure the chat session exists first to avoid foreign key constraint failure
     await this.ensureSession(chatId)
 
+    const results = messages.reduce<(typeof aiChatMessagesTable.$inferInsert)[]>((acc, message) => {
+      if (message.parts.length === 0) return acc
+
+      const { createdAt } = message
+      const cleanParts = [] as typeof message.parts
+
+      for (const part of message.parts) {
+        if (isDataBlockPart(part)) {
+          const nextPart = structuredClone(part)
+          for (const block of nextPart.data) {
+            if (isFileAttachmentBlock(block)) {
+              Reflect.deleteProperty(block.attachment, "dataUrl")
+            }
+          }
+
+          cleanParts.push(nextPart)
+        } else {
+          cleanParts.push(part)
+        }
+      }
+
+      acc.push({
+        id: message.id,
+        chatId,
+        role: message.role,
+        createdAt,
+        status: "completed" as const,
+        finishedAt: message.metadata?.finishTime
+          ? new Date(message.metadata.finishTime)
+          : undefined,
+        messageParts: cleanParts,
+        metadata: message.metadata,
+      })
+
+      return acc
+    }, [])
     await db
       .insert(aiChatMessagesTable)
-      .values(
-        messages
-          .filter((message) => message.parts.length > 0)
-          .map((message) => {
-            return {
-              id: message.id,
-              chatId,
-              role: message.role,
-              contentFormat: "plaintext" as const,
-              createdAt: new Date(),
-              status: "completed" as const,
-              finishedAt: message.metadata?.finishTime
-                ? new Date(message.metadata.finishTime)
-                : undefined,
-              messageParts: message.parts,
-              metadata: message.metadata,
-            } as typeof aiChatMessagesTable.$inferInsert
-          }),
-      )
+      .values(results)
       .onConflictDoUpdate({
         target: [aiChatMessagesTable.id],
         set: {
@@ -208,7 +178,7 @@ class AIPersistServiceStatic {
     }
 
     // Only query database if not in cache or cache shows it doesn't exist
-    if (cachedExists === undefined) {
+    if (!cachedExists) {
       const existing = await this.getChatSession(chatId)
 
       if (existing) {
@@ -247,17 +217,7 @@ class AIPersistServiceStatic {
         updatedAt: true,
       },
     })
-
-    // Explicitly check if the result is valid
-    if (!result || !result.chatId) {
-      // Mark as not existing in cache
-      this.markSessionExists(chatId, false)
-      return null
-    }
-
-    // Mark as existing in cache
-    this.markSessionExists(chatId, true)
-    return result
+    return result?.chatId ? result : null
   }
 
   async getChatSessions(limit = 20) {

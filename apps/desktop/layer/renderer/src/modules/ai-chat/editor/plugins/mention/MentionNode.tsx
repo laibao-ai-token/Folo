@@ -1,3 +1,5 @@
+import { getCategoryFeedIds } from "@follow/store/subscription/getter"
+import i18next from "i18next"
 import type {
   DOMConversionMap,
   DOMConversionOutput,
@@ -12,7 +14,12 @@ import type {
 import { $applyNodeReplacement, DecoratorNode } from "lexical"
 import * as React from "react"
 
+import { ROUTE_FEED_IN_FOLDER } from "~/constants"
+import { getRouteParams } from "~/hooks/biz/useRouteParams"
+
 import { MentionComponent } from "./components/MentionComponent"
+import { RANGE_WITH_LABEL_KEY } from "./hooks/dateMentionConfig"
+import { getDateMentionDisplayName } from "./hooks/dateMentionUtils"
 import type { MentionData } from "./types"
 
 export type SerializedMentionNode = Spread<
@@ -76,7 +83,7 @@ export class MentionNode extends DecoratorNode<React.JSX.Element> {
     element.dataset.lexicalMention = "true"
     element.dataset.mentionType = this.__mentionData.type
     element.dataset.mentionId = this.__mentionData.id
-    element.textContent = `@${this.__mentionData.name}`
+    element.textContent = `@${resolveMentionDisplayName(this.__mentionData)}`
     element.className = "mention-node"
     return { element }
   }
@@ -93,7 +100,22 @@ export class MentionNode extends DecoratorNode<React.JSX.Element> {
    * For export markdown conversion
    */
   override getTextContent(): string {
-    return `[[ref:${this.__mentionData.type}:${this.__mentionData.value}]]`
+    const { type, value } = this.__mentionData
+    if (type === "date" && value) {
+      return value as string
+    }
+
+    if (
+      type === "category" &&
+      typeof value === "string" &&
+      value.startsWith(ROUTE_FEED_IN_FOLDER)
+    ) {
+      const { view } = getRouteParams()
+      const ids = getCategoryFeedIds(value.slice(ROUTE_FEED_IN_FOLDER.length), view)
+      return `<mention-feed ids=${JSON.stringify(ids)}></mention-feed>`
+    }
+
+    return `<mention-${type} id="${value}"></mention-${type}>`
   }
 
   override decorate(_editor: LexicalEditor): React.JSX.Element {
@@ -163,4 +185,15 @@ export function $createMentionNode(mentionData: MentionData): MentionNode {
 
 export function $isMentionNode(node: LexicalNode | null | undefined): node is MentionNode {
   return node instanceof MentionNode
+}
+
+const resolveMentionDisplayName = (mentionData: MentionData): string => {
+  if (mentionData.type !== "date") {
+    return mentionData.name
+  }
+
+  const language = i18next.language || i18next.resolvedLanguage || i18next.options?.lng || "en"
+  const translate = i18next.getFixedT(language, "ai")
+
+  return getDateMentionDisplayName(mentionData, translate, language, RANGE_WITH_LABEL_KEY)
 }

@@ -11,7 +11,6 @@ import type { EntryHeaderProps } from "../types"
 
 interface EntryHeaderContextValue {
   entryId: string
-  compact?: boolean
 }
 
 const EntryHeaderContext = createContext<EntryHeaderContextValue | null>(null)
@@ -38,7 +37,7 @@ function EntryHeaderRootImpl({
   const entryTitleMeta = useEntryTitleMeta()
   const isAtTop = !!useEntryContentScrollToTop()
 
-  const shouldShowMeta = !isAtTop && !!entryTitleMeta?.title
+  const shouldShowMeta = !isAtTop && !!entryTitleMeta?.entryTitle
 
   const contextValue = useMemo(() => ({ entryId, compact }), [entryId, compact])
   if (!hasEntry) return null
@@ -48,7 +47,7 @@ function EntryHeaderRootImpl({
       <m.div
         data-hide-in-print
         className={cn(
-          "zen-mode-macos:ml-margin-macos-traffic-light-x text-text-secondary relative flex min-w-0 items-center justify-between gap-3 overflow-hidden text-lg duration-200",
+          "macos-left-column-hidden:pl-margin-macos-traffic-light-x text-text-secondary relative flex min-w-0 items-center justify-between gap-3 overflow-hidden text-lg duration-200",
           shouldShowMeta && "border-border border-b",
           className,
         )}

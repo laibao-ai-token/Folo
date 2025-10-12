@@ -7,6 +7,7 @@ import { cn } from "@follow/utils"
 import { ErrorBoundary } from "@sentry/react"
 import { useCallback, useMemo, useRef, useState } from "react"
 
+import { AIChatPanelStyle, useAIChatPanelStyle } from "~/atoms/settings/ai"
 import { useUISettingKey } from "~/atoms/settings/ui"
 import { ShadowDOM } from "~/components/common/ShadowDOM"
 import type { TocRef } from "~/components/ui/markdown/components/Toc"
@@ -19,27 +20,18 @@ import { BlockSliceAction } from "~/modules/ai-chat/store/slices/block.slice"
 import { EntryContentHTMLRenderer } from "~/modules/renderer/html"
 import { WrappedElementProvider } from "~/providers/wrapped-element-provider"
 
+import { AISummary } from "../../AISummary"
 import { useEntryContent, useEntryMediaInfo } from "../../hooks"
 import { ContainerToc } from "../entry-content/accessories/ContainerToc"
 import { EntryRenderError } from "../entry-content/EntryRenderError"
-import { EntryTitleMetaHandler } from "../entry-content/EntryTitleMetaHandler"
 import { ReadabilityNotice } from "../entry-content/ReadabilityNotice"
 import { EntryAttachments } from "../EntryAttachments"
 import { EntryTitle } from "../EntryTitle"
-import { SupportCreator } from "../SupportCreator"
 import { MediaTranscript, TranscriptToggle, useTranscription } from "./shared"
+import { ArticleAudioPlayer } from "./shared/AudioPlayer"
+import type { EntryLayoutProps } from "./types"
 
-interface ArticleLayoutProps {
-  entryId: string
-  compact?: boolean
-  noMedia?: boolean
-  translation?: {
-    content?: string
-    title?: string
-  }
-}
-
-export const ArticleLayout: React.FC<ArticleLayoutProps> = ({
+export const ArticleLayout: React.FC<EntryLayoutProps> = ({
   entryId,
   compact = false,
   noMedia = false,
@@ -73,11 +65,16 @@ export const ArticleLayout: React.FC<ArticleLayoutProps> = ({
     removeBlock(BlockSliceAction.SPECIAL_TYPES.selectedText)
   }, [removeBlock])
 
+  const aiChatPanelStyle = useAIChatPanelStyle()
+
+  const shouldShowAISummary = aiChatPanelStyle === AIChatPanelStyle.Floating
   if (!entry) return null
 
   return (
-    <div className={cn(readableContentMaxWidthClassName, "@[500px]:px-4 mx-auto")}>
-      <EntryTitle entryId={entryId} compact={compact} />
+    <div className={cn(readableContentMaxWidthClassName, "mx-auto mt-1 px-4")}>
+      <EntryTitle entryId={entryId} compact={compact} containerClassName="mt-12" />
+
+      <ArticleAudioPlayer entryId={entryId} />
 
       {/* Content Type Toggle */}
       <TranscriptToggle
@@ -87,8 +84,8 @@ export const ArticleLayout: React.FC<ArticleLayoutProps> = ({
       />
 
       <WrappedElementProvider boundingDetection>
-        <div className="mx-auto mb-32 mt-8 max-w-full cursor-auto text-[0.94rem]">
-          <EntryTitleMetaHandler entryId={entryId} />
+        <div className="mx-auto mb-32 mt-6 max-w-full cursor-auto text-[0.94rem]">
+          {shouldShowAISummary && <AISummary entryId={entryId} />}
           <ErrorBoundary fallback={EntryRenderError}>
             <ReadabilityNotice entryId={entryId} />
             {showTranscript ? (
@@ -122,7 +119,6 @@ export const ArticleLayout: React.FC<ArticleLayoutProps> = ({
       </WrappedElementProvider>
 
       <EntryAttachments entryId={entryId} />
-      <SupportCreator entryId={entryId} />
     </div>
   )
 }

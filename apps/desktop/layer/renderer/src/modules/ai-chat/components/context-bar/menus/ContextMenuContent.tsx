@@ -9,7 +9,7 @@ import {
 } from "~/components/ui/dropdown-menu/dropdown-menu"
 import { useChatBlockActions } from "~/modules/ai-chat/store/hooks"
 
-import { CurrentFeedEntriesPickerList, FeedPickerList, RecentEntriesPickerList } from "../pickers"
+import { CurrentFeedEntriesPickerList, RecentEntriesPickerList } from "../pickers"
 
 export const ContextMenuContent: FC = () => {
   const blockActions = useChatBlockActions()
@@ -45,22 +45,6 @@ export const ContextMenuContent: FC = () => {
               blockActions.addBlock({
                 type: "referEntry",
                 value: entryId,
-              })
-            }
-          />
-        </DropdownMenuSubContent>
-      </DropdownMenuSub>
-      <DropdownMenuSub>
-        <DropdownMenuSubTrigger>
-          <i className="i-mgc-rss-cute-fi mr-1.5 size-4" />
-          Reference Feed
-        </DropdownMenuSubTrigger>
-        <DropdownMenuSubContent>
-          <FeedPickerList
-            onSelect={(feedId) =>
-              blockActions.addBlock({
-                type: "referFeed",
-                value: feedId,
               })
             }
           />

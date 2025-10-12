@@ -1,8 +1,13 @@
-import { useCallback, useState } from "react"
+import { startTransition, useCallback, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
-import { AIChatPanelStyle, setAIChatPanelStyle, useAIChatPanelStyle } from "~/atoms/settings/ai"
+import {
+  AIChatPanelStyle,
+  setAIChatPanelStyle,
+  setAIPanelVisibility,
+  useAIChatPanelStyle,
+} from "~/atoms/settings/ai"
 import { RelativeDay } from "~/components/ui/datetime"
 import {
   DropdownMenu,
@@ -58,7 +63,7 @@ export const ChatMoreDropdown = ({
 
       const confirm = await ask({
         title: t("delete_chat"),
-        message: t("delete_chat_message", { title: session.title || "New Chat" }),
+        message: t("delete_chat_message", { title: session.title || t("common.new_chat") }),
         variant: "danger",
       })
 
@@ -108,6 +113,10 @@ export const ChatMoreDropdown = ({
     setAIChatPanelStyle(newStyle)
   }, [panelStyle])
 
+  const handleCloseSidebar = useRef(() => {
+    setAIPanelVisibility(false)
+  }).current
+
   return (
     <DropdownMenu onOpenChange={handleDropdownOpen}>
       <DropdownMenuTrigger asChild={asChild}>{triggerElement}</DropdownMenuTrigger>
@@ -118,7 +127,7 @@ export const ChatMoreDropdown = ({
             <i className="i-mgc-history-cute-re size-4" />
             <span>Chat History</span>
           </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="max-h-96 w-72 overflow-y-auto p-2">
+          <DropdownMenuSubContent className="max-h-96 w-72 overflow-y-auto">
             {loading ? (
               <div className="flex items-center justify-center py-8">
                 <i className="i-mgc-loading-3-cute-re text-text-secondary size-5 animate-spin" />
@@ -131,18 +140,20 @@ export const ChatMoreDropdown = ({
                 {sessions.map((session) => (
                   <DropdownMenuItem
                     key={session.chatId}
-                    onClick={() => chatActions.switchToChat(session.chatId)}
+                    onClick={() => startTransition(() => chatActions.switchToChat(session.chatId))}
                     className="group flex h-12 cursor-pointer items-center justify-between rounded-md px-2 py-3"
                   >
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{session.title || "New Chat"}</p>
-                      <p className="text-text-secondary group-hover:text-text-secondary-dark mt-0.5 text-xs">
+                      <p className="truncate text-sm font-medium">
+                        {session.title || t("common.new_chat")}
+                      </p>
+                      <p className="text-text-secondary group-data-[highlighted]:text-text-secondary-dark mt-0.5 text-xs">
                         <span>{session.messageCount}</span>
                         <span> {session.messageCount === 1 ? "message" : "messages"}</span>
                       </p>
                     </div>
                     <div className="relative flex min-w-0 items-center">
-                      <span className="text-text-secondary group-hover:text-text-secondary-dark ml-2 shrink-0 cursor-help text-xs">
+                      <span className="text-text-secondary group-data-[highlighted]:text-text-secondary-dark ml-2 shrink-0 cursor-help text-xs">
                         <RelativeDay date={session.updatedAt} />
                       </span>
                       <button
@@ -175,9 +186,9 @@ export const ChatMoreDropdown = ({
           <span>Export Chat</span>
         </DropdownMenuItem>
 
+        <DropdownMenuSeparator />
         {canToggleMode && (
           <>
-            <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handleToggleMode}>
               <i
                 className={`mr-2 size-4 ${panelStyle === AIChatPanelStyle.Fixed ? "i-mingcute-rectangle-vertical-line" : "i-mingcute-layout-right-line"}`}
@@ -195,6 +206,16 @@ export const ChatMoreDropdown = ({
           <i className="i-mgc-settings-1-cute-re mr-2 size-4" />
           <span>AI Settings</span>
         </DropdownMenuItem>
+
+        {panelStyle !== AIChatPanelStyle.Floating && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={handleCloseSidebar}>
+              <i className="i-mgc-close-cute-re mr-2 size-4" />
+              <span>Close Sidebar</span>
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   )

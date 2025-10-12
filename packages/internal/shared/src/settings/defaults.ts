@@ -9,9 +9,6 @@ export const defaultGeneralSettings: GeneralSettings = {
   summary: true,
   actionLanguage: "default",
 
-  // mobile app
-  startupScreen: "timeline",
-
   sendAnonymousData: true,
   showQuickTimeline: true,
 
@@ -83,6 +80,7 @@ export const defaultUISettings: UISettings = {
 
   // View
   pictureViewMasonry: true,
+  pictureViewImageOnly: false,
   wideMode: false,
 
   // Action Order
@@ -96,6 +94,12 @@ export const defaultUISettings: UISettings = {
 
   // Discover
   discoverLanguage: "all",
+
+  // Timeline tabs preset (excluding the first fixed tab)
+  timelineTabs: {
+    visible: [],
+    hidden: [],
+  },
 }
 
 export const defaultIntegrationSettings: IntegrationSettings = {

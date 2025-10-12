@@ -1,5 +1,5 @@
-import type { SupportedLanguages } from "@follow/models/types"
 import type { SupportedActionLanguage } from "@follow/shared"
+import type { SupportedLanguages } from "@follow-app/client-sdk"
 import { useQueries } from "@tanstack/react-query"
 import { useCallback } from "react"
 
@@ -13,14 +13,12 @@ export const usePrefetchEntryTranslation = ({
   target = "content",
   setting,
   language,
-  checkLanguage,
 }: {
   entryIds: string[]
   withContent?: boolean
   target?: "content" | "readabilityContent"
   setting: boolean
   language: SupportedActionLanguage
-  checkLanguage: (params: { content: string; language: SupportedActionLanguage }) => boolean
 }) => {
   const entryList = (useEntryList(entryIds)?.filter(
     (entry) => entry !== null && (setting || !!entry?.settings?.translation),
@@ -41,7 +39,6 @@ export const usePrefetchEntryTranslation = ({
             language,
             withContent: finalWithContent,
             target,
-            checkLanguage,
           }),
       }
     }),

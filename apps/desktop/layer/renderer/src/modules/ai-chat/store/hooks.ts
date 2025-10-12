@@ -1,3 +1,6 @@
+import type { BizUIMessage } from "@folo-services/ai-tools"
+import { useShallow } from "zustand/shallow"
+
 import { useAIChatStore } from "./AIChatContext"
 
 /**
@@ -40,6 +43,19 @@ export const useMessages = () => {
   return store((state) => state.messages)
 }
 
+export const useMessageByIdSelector = <T>(
+  messageId: string,
+  selector: (message: BizUIMessage) => T,
+): T | undefined => {
+  const store = useAIChatStore()
+  return store(
+    useShallow((state) => {
+      const message = state.messages.find((message) => message.id === messageId)
+      return message ? selector(message) : undefined
+    }),
+  )
+}
+
 /**
  * Hook to check if the chat has messages
  */
@@ -63,4 +79,12 @@ export const useChatStatus = () => {
 export const useChatError = () => {
   const store = useAIChatStore()
   return store((state) => state.error)
+}
+
+/**
+ * Hook to get the chat scene
+ */
+export const useChatScene = () => {
+  const store = useAIChatStore()
+  return store((state) => state.scene)
 }

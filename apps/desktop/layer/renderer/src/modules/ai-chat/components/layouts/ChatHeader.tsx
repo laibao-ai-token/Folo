@@ -1,13 +1,21 @@
 import { ActionButton } from "@follow/components/ui/button/index.js"
+import { FeedViewType } from "@follow/constants"
+import { cn } from "@follow/utils"
+import { useAtomValue } from "jotai"
 import type { ReactNode } from "react"
-import { useCallback } from "react"
+import { useCallback, useMemo } from "react"
+import { getI18n, useTranslation } from "react-i18next"
 
 import { AIChatPanelStyle, setAIPanelVisibility, useAIChatPanelStyle } from "~/atoms/settings/ai"
-import { GlassButton } from "~/components/ui/button/GlassButton"
+import { ROUTE_ENTRY_PENDING } from "~/constants"
+import { useRouteParamsSelector } from "~/hooks/biz/useRouteParams"
 import { useBlockActions, useChatActions, useCurrentTitle } from "~/modules/ai-chat/store/hooks"
 
+import { useMainEntryId } from "../../hooks/useMainEntryId"
+import { useAIRootState } from "../../store/AIChatContext"
 import { ChatMoreDropdown } from "./ChatMoreDropdown"
 import { EditableTitle } from "./EditableTitle"
+import { TaskReportDropdown } from "./TaskReportDropdown"
 
 // Base header layout with shared logic inside
 const ChatHeaderLayout = ({
@@ -16,22 +24,48 @@ const ChatHeaderLayout = ({
   renderActions: (ctx: {
     onNewChatClick: () => void
     currentTitle: string | undefined
+    displayTitle: string | undefined
     onSaveTitle: (newTitle: string) => Promise<void>
   }) => ReactNode
 }) => {
   const currentTitle = useCurrentTitle()
   const chatActions = useChatActions()
   const blockActions = useBlockActions()
+  const { t } = useTranslation("ai")
+
+  const mainEntryId = useMainEntryId()
+  const { view, isAllFeeds, entryId } = useRouteParamsSelector((s) => ({
+    view: s.view,
+    isAllFeeds: s.isAllFeeds,
+    entryId: s.entryId,
+  }))
+  const realEntryId = entryId === ROUTE_ENTRY_PENDING ? "" : entryId
+  const isAllView = view === FeedViewType.All && isAllFeeds && !realEntryId
+  const hasEntryContext = !!mainEntryId
+  const shouldShowTimelineSummary = isAllView && !hasEntryContext
+
+  const timelineSummaryTitle = useMemo(() => {
+    if (!shouldShowTimelineSummary) return
+
+    return t("timeline.summary.title_template", {
+      date: Intl.DateTimeFormat(getI18n().language, {
+        dateStyle: "short",
+      }).format(),
+    })
+  }, [shouldShowTimelineSummary, t])
+
+  const displayTitle = currentTitle || timelineSummaryTitle
 
   const handleNewChatClick = useCallback(() => {
     const messages = chatActions.getMessages()
-    if (messages.length === 0 && !currentTitle) {
+
+    if (messages.length === 0) {
       return
     }
 
     chatActions.newChat()
     blockActions.clearBlocks({ keepSpecialTypes: true })
-  }, [chatActions, currentTitle, blockActions])
+  }, [chatActions, blockActions])
 
   const handleTitleSave = useCallback(
     async (newTitle: string) => {
@@ -40,29 +74,46 @@ const ChatHeaderLayout = ({
     [chatActions],
   )
 
-  const maskImage = `linear-gradient(to bottom, black 0%, black 75%, transparent 100%)`
+  const isFloating = useAIChatPanelStyle() === AIChatPanelStyle.Floating
+
+  const { isScrolledBeyondThreshold } = useAIRootState()
+  const isScrolledBeyondThresholdValue = useAtomValue(isScrolledBeyondThreshold)
   return (
-    <div className="absolute inset-x-0 top-0 z-[1] h-12">
-      <div
-        className="bg-background/70 backdrop-blur-background absolute inset-0"
-        style={{
-          maskImage,
-          WebkitMaskImage: maskImage,
-        }}
-      />
+    <div
+      className={cn(
+        "absolute inset-x-0 top-0 z-[1] border-b border-transparent duration-200",
+        !isFloating && "bg-background data-[scrolled-beyond-threshold=true]:border-b-border",
+      )}
+      data-scrolled-beyond-threshold={isScrolledBeyondThresholdValue}
+    >
+      <div className="h-top-header">
+        {isFloating && (
+          <div
+            className="bg-background/70 backdrop-blur-background absolute inset-0"
+            style={{
+              maskImage: `linear-gradient(to bottom, black 0%, black 90%, transparent 100%)`,
+            }}
+          />
+        )}
 
-      <div className="relative z-10 flex h-full items-center justify-between px-4">
-        <div className="mr-2 flex min-w-0 flex-1 items-center">
-          <EditableTitle title={currentTitle} onSave={handleTitleSave} placeholder="New Chat" />
-        </div>
+        <div className="relative z-10 flex h-full items-center justify-between px-4">
+          <div className="mr-2 flex min-w-0 flex-1 items-center">
+            <EditableTitle
+              title={displayTitle}
+              onSave={handleTitleSave}
+              placeholder={t("common.new_chat")}
+            />
+          </div>
 
-        {/* Right side - Actions */}
-        <div className="flex items-center gap-2">
-          {renderActions({
-            onNewChatClick: handleNewChatClick,
-            currentTitle,
-            onSaveTitle: handleTitleSave,
-          })}
+          {/* Right side - Actions */}
+          <div className="flex items-center gap-2">
+            {renderActions({
+              onNewChatClick: handleNewChatClick,
+              currentTitle,
+              displayTitle,
+              onSaveTitle: handleTitleSave,
+            })}
+          </div>
         </div>
       </div>
     </div>
@@ -71,19 +122,22 @@ const ChatHeaderLayout = ({
 
 export const ChatHeader = () => {
   const panelStyle = useAIChatPanelStyle()
+  const { t } = useTranslation("ai")
 
   return (
     <ChatHeaderLayout
       renderActions={({ onNewChatClick }) => (
         <>
-          <ActionButton tooltip="New Chat" onClick={onNewChatClick}>
+          <ActionButton tooltip={t("common.new_chat")} onClick={onNewChatClick}>
             <i className="i-mgc-add-cute-re text-text-secondary size-5" />
           </ActionButton>
+
+          <TaskReportDropdown />
 
           <ChatMoreDropdown
             triggerElement={
               <ActionButton tooltip="More">
-                <i className="i-mingcute-more-1-fill size-5 opacity-80" />
+                <i className="i-mingcute-more-1-fill text-text-secondary size-5" />
               </ActionButton>
             }
           />
@@ -103,22 +157,25 @@ export const ChatHeader = () => {
 }
 
 export const ChatPageHeader = () => {
+  const { t } = useTranslation("ai")
+
   return (
     <ChatHeaderLayout
       renderActions={({ onNewChatClick }) => (
         <>
-          <GlassButton description="New Chat" size="sm" onClick={onNewChatClick}>
-            <i className="i-mgc-add-cute-re text-text-secondary size-4" />
-          </GlassButton>
+          <ActionButton tooltip={t("common.new_chat")} onClick={onNewChatClick}>
+            <i className="i-mgc-add-cute-re text-text-secondary size-5" />
+          </ActionButton>
+
+          <TaskReportDropdown />
 
           <div className="bg-border mx-2 h-5 w-px" />
           <ChatMoreDropdown
             canToggleMode={false}
-            asChild={false}
             triggerElement={
-              <GlassButton description="More" size="sm">
-                <i className="i-mingcute-more-1-fill size-4 opacity-80" />
-              </GlassButton>
+              <ActionButton tooltip="More">
+                <i className="i-mingcute-more-1-fill text-text-secondary size-5" />
+              </ActionButton>
             }
           />
         </>

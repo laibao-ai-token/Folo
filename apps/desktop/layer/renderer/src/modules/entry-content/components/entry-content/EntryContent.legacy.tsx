@@ -1,3 +1,4 @@
+import { useGlobalFocusableScopeSelector } from "@follow/components/common/Focusable/hooks.js"
 import { MemoedDangerousHTMLStyle } from "@follow/components/common/MemoedDangerousHTMLStyle.js"
 import { Spring } from "@follow/components/constants/spring.js"
 import { MotionButtonBase } from "@follow/components/ui/button/index.js"
@@ -5,9 +6,9 @@ import { RootPortal } from "@follow/components/ui/portal/index.js"
 import { ScrollArea } from "@follow/components/ui/scroll-area/index.js"
 import { FeedViewType } from "@follow/constants"
 import { useTitle } from "@follow/hooks"
-import type { FeedModel } from "@follow/models/types"
 import { useEntry } from "@follow/store/entry/hooks"
 import { useFeedById } from "@follow/store/feed/hooks"
+import type { FeedModel } from "@follow/store/feed/types"
 import { useIsInbox } from "@follow/store/inbox/hooks"
 import { thenable } from "@follow/utils"
 import { nextFrame, stopPropagation } from "@follow/utils/dom"
@@ -15,17 +16,18 @@ import { EventBus } from "@follow/utils/event-bus"
 import { clsx, cn } from "@follow/utils/utils"
 import { ErrorBoundary } from "@sentry/react"
 import type { JSAnimation, Variants } from "motion/react"
-import { m, useAnimationControls } from "motion/react"
+import { AnimatePresence, m, useAnimationControls } from "motion/react"
 import * as React from "react"
 import { memo, useEffect, useMemo, useRef, useState } from "react"
 
 import { useEntryIsInReadability } from "~/atoms/readability"
-import { useIsZenMode, useUISettingKey } from "~/atoms/settings/ui"
-import { Focusable } from "~/components/common/Focusable"
+import { useUISettingKey } from "~/atoms/settings/ui"
+import { Focusable, FocusablePresets } from "~/components/common/Focusable"
 import { ShadowDOM } from "~/components/common/ShadowDOM"
 import type { TocRef } from "~/components/ui/markdown/components/Toc"
 import { useInPeekModal } from "~/components/ui/modal/inspire/InPeekModal"
 import { HotkeyScope } from "~/constants"
+import { useNavigateEntry } from "~/hooks/biz/useNavigateEntry"
 import { useRenderStyle } from "~/hooks/biz/useRenderStyle"
 import { useRouteParamsSelector } from "~/hooks/biz/useRouteParams"
 import { useFeedSafeUrl } from "~/hooks/common/useFeedSafeUrl"
@@ -35,15 +37,16 @@ import { WrappedElementProvider } from "~/providers/wrapped-element-provider"
 
 import { AISummary } from "../../AISummary"
 import { ApplyEntryActions } from "../../ApplyEntryActions"
+import { NAVIGATION_HINTS_ICONS, NAVIGATION_HINTS_TEXT } from "../../constants/navigation-hints"
 import { useEntryContent, useEntryMediaInfo } from "../../hooks"
+import { useEntryNavigationHints } from "../../hooks/useEntryNavigationHints"
 import { EntryHeader } from "../entry-header"
 import { EntryAttachments } from "../EntryAttachments"
-import { EntryTimelineSidebar } from "../EntryTimelineSidebar"
 import { EntryTitle } from "../EntryTitle"
 import { SourceContentPanel } from "../SourceContentView"
-import { SupportCreator } from "../SupportCreator"
 import { ContainerToc } from "./accessories/ContainerToc"
 import { EntryCommandShortcutRegister } from "./EntryCommandShortcutRegister"
+import { EntryContentFallback } from "./EntryContentFallback"
 import { EntryContentLoading } from "./EntryContentLoading"
 import { EntryNoContent } from "./EntryNoContent"
 import { EntryRenderError } from "./EntryRenderError"
@@ -88,7 +91,6 @@ const EntryContentImpl: Component<EntryContentProps> = ({
   const customCSS = useUISettingKey("customCSS")
 
   const isInPeekModal = useInPeekModal()
-  const isZenMode = useIsZenMode()
 
   const [panelPortalElement, setPanelPortalElement] = useState<HTMLDivElement | null>(null)
 
@@ -136,8 +138,9 @@ const EntryContentImpl: Component<EntryContentProps> = ({
             scrollerRef={scrollerRef}
           />
         </RootPortal>
-        <EntryTimelineSidebar entryId={entryId} />
+
         <EntryScrollArea className={className} scrollerRef={scrollerRef}>
+          <EntryNavigationHandler entryId={entryId} />
           {/* Indicator for the entry */}
           <m.div
             initial={pageMotionVariants.initial}
@@ -145,7 +148,7 @@ const EntryContentImpl: Component<EntryContentProps> = ({
             transition={Spring.presets.bouncy}
             className="select-text"
           >
-            {!isZenMode && isInHasTimelineView && !isInPeekModal && (
+            {isInHasTimelineView && !isInPeekModal && (
               <>
                 <div className="absolute inset-y-0 left-0 flex w-12 items-center justify-center opacity-0 duration-200 hover:opacity-100">
                   <MotionButtonBase
@@ -182,7 +185,7 @@ const EntryContentImpl: Component<EntryContentProps> = ({
                   : "@[950px]:max-w-[70ch] @7xl:max-w-[80ch] max-w-[550px]",
               )}
             >
-              <EntryTitle entryId={entryId} compact={compact} />
+              <EntryTitle entryId={entryId} compact={compact} noRecentReader />
 
               <WrappedElementProvider boundingDetection>
                 <div className="mx-auto mb-32 mt-8 max-w-full cursor-auto text-[0.94rem]">
@@ -230,7 +233,6 @@ const EntryContentImpl: Component<EntryContentProps> = ({
               )}
 
               <EntryAttachments entryId={entryId} />
-              <SupportCreator entryId={entryId} />
             </article>
           </m.div>
         </EntryScrollArea>
@@ -239,7 +241,13 @@ const EntryContentImpl: Component<EntryContentProps> = ({
     </>
   )
 }
-export const EntryContent = memo(EntryContentImpl)
+export const EntryContent: Component<EntryContentProps> = memo((props) => {
+  return (
+    <EntryContentFallback entryId={props.entryId}>
+      <EntryContentImpl {...props} />
+    </EntryContentFallback>
+  )
+})
 
 const EntryScrollArea: Component<{
   scrollerRef: React.RefObject<HTMLDivElement | null>
@@ -311,3 +319,73 @@ const Renderer: React.FC<{
     </EntryContentHTMLRenderer>
   )
 })
+
+// EntryNavigationHandler for legacy version (without wheel gesture)
+const EntryNavigationHandler = ({ entryId }: { entryId: string }) => {
+  const navigate = useNavigateEntry()
+  const when = useGlobalFocusableScopeSelector(FocusablePresets.isEntryRender)
+
+  // Handle close gesture
+  const handleCloseEntry = React.useCallback(() => {
+    navigate({ entryId: null })
+  }, [navigate])
+
+  // Navigation hints for entry content (legacy version without wheel gesture)
+  const { showFirstEntryHint, showScrollHint, showBottomHint } = useEntryNavigationHints({
+    enabled: when && !!entryId,
+    entryId,
+  })
+
+  // Render hint button with different states
+  const renderHintButton = (icon: string, text: string, position: "top" | "bottom" = "top") => (
+    <m.div
+      initial={{ y: position === "top" ? -50 : 50, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      exit={{ y: position === "top" ? -50 : 50, opacity: 0 }}
+      transition={Spring.presets.smooth}
+      className={clsx(
+        "pointer-events-none absolute z-40 flex justify-center",
+        position === "top" ? "inset-x-0 top-4" : "inset-x-0 bottom-4",
+      )}
+    >
+      <button
+        onClick={handleCloseEntry}
+        type="button"
+        className={clsx(
+          "group pointer-events-auto flex items-center gap-2",
+          "rounded-full border px-3.5 py-2",
+          "border-border/40 bg-material-ultra-thin/70 shadow-[0_1px_2px_rgba(0,0,0,0.06),0_8px_24px_rgba(0,0,0,0.08)]",
+          "hover:bg-material-thin/70 hover:border-border/60 active:scale-[0.98]",
+          "backdrop-blur-background",
+        )}
+      >
+        <i className={clsx(icon, "text-text/90 mr-1 size-5")} />
+        <span className="text-text/90 text-left text-[13px] font-medium">{text}</span>
+      </button>
+    </m.div>
+  )
+
+  return (
+    <AnimatePresence mode="popLayout">
+      {/* First entry hint */}
+      {showFirstEntryHint &&
+        renderHintButton(
+          NAVIGATION_HINTS_ICONS.ARROW_UP,
+          NAVIGATION_HINTS_TEXT.SCROLL_UP_EXIT,
+          "top",
+        )}
+
+      {/* Scroll threshold hint */}
+      {showScrollHint &&
+        renderHintButton(
+          NAVIGATION_HINTS_ICONS.ARROW_UP,
+          NAVIGATION_HINTS_TEXT.SCROLL_UP_EXIT,
+          "top",
+        )}
+
+      {/* Bottom hint */}
+      {showBottomHint &&
+        renderHintButton(NAVIGATION_HINTS_ICONS.CLOSE, NAVIGATION_HINTS_TEXT.ESC_EXIT, "bottom")}
+    </AnimatePresence>
+  )
+}

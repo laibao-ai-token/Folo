@@ -1,17 +1,27 @@
+import type { LexicalRichEditorRef } from "@follow/components/ui/lexical-rich-editor/types.js"
+import type { IdGenerator } from "ai"
+import { atom } from "jotai"
 import type { FC, PropsWithChildren } from "react"
-import { useMemo, useRef } from "react"
+import { useEffect, useMemo, useRef } from "react"
 
 import { Focusable } from "~/components/common/Focusable"
 import { HotkeyScope } from "~/constants"
 
+import { useAIShortcut } from "../../hooks/useAIShortcut"
 import type { AIPanelRefs } from "../../store/AIChatContext"
-import { AIChatStoreContext, AIPanelRefsContext } from "../../store/AIChatContext"
+import {
+  AIChatStoreContext,
+  AIPanelRefsContext,
+  AIRootStateContext,
+} from "../../store/AIChatContext"
+import { ChatSliceActions } from "../../store/chat-core/chat-actions"
 import { useChatActions, useCurrentChatId } from "../../store/hooks"
 import { createAIChatStore } from "../../store/store"
 
 interface AIChatRootProps extends PropsWithChildren {
   wrapFocusable?: boolean
   chatId?: string
+  generateId?: IdGenerator
 }
 
 const AIChatRootInner: FC<AIChatRootProps> = ({ children, chatId: externalChatId }) => {
@@ -25,9 +35,9 @@ const AIChatRootInner: FC<AIChatRootProps> = ({ children, chatId: externalChatId
     }
   }, [currentChatId, externalChatId, chatActions])
 
-  const panelRef = useRef<HTMLDivElement>(null!)
-  const inputRef = useRef<HTMLTextAreaElement>(null!)
-  const refsContext = useMemo<AIPanelRefs>(() => ({ panelRef, inputRef }), [panelRef, inputRef])
+  const inputRef = useRef<LexicalRichEditorRef>(null!)
+  const refsContext = useMemo<AIPanelRefs>(() => ({ inputRef }), [inputRef])
+  useAIShortcut()
 
   if (!currentChatId) {
     return (
@@ -47,12 +57,33 @@ export const AIChatRoot: FC<AIChatRootProps> = ({
   children,
   wrapFocusable = true,
   chatId: externalChatId,
+  generateId,
 }) => {
-  const useAiContextStore = useMemo(createAIChatStore, [])
+  const stableGenerateIdFn = useRef(generateId)
+  stableGenerateIdFn.current = generateId
+
+  const useAiContextStore = useMemo(
+    () => createAIChatStore({ chatId: externalChatId, generateId: stableGenerateIdFn.current }),
+    [externalChatId],
+  )
+  const chatActions = useAiContextStore((state) => state.chatActions)
+
+  useEffect(() => {
+    ChatSliceActions.setActiveInstance(chatActions)
+  }, [chatActions])
 
   const Element = (
     <AIChatStoreContext value={useAiContextStore}>
-      <AIChatRootInner chatId={externalChatId}>{children}</AIChatRootInner>
+      <AIRootStateContext
+        value={useMemo(
+          () => ({
+            isScrolledBeyondThreshold: atom(false),
+          }),
+          [],
+        )}
+      >
+        <AIChatRootInner chatId={externalChatId}>{children}</AIChatRootInner>
+      </AIRootStateContext>
     </AIChatStoreContext>
   )
 
@@ -65,3 +96,4 @@ export const AIChatRoot: FC<AIChatRootProps> = ({
   }
   return Element
 }
+AIChatRoot.displayName = "AIChatRoot"

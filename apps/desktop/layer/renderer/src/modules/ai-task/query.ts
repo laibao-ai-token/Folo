@@ -1,8 +1,9 @@
+import type { WithOptimistic } from "@follow/hooks"
+import { createOptimisticConfig, useOptimisticMutation } from "@follow/hooks"
 import type {
+  AITask,
   CreateTaskRequest,
   TaskCreateResponse,
-  TaskDeleteResponse,
-  TaskUpdateResponse,
   UpdateTaskRequest,
 } from "@follow-app/client-sdk"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -11,22 +12,25 @@ import { followApi } from "~/lib/api-client"
 
 const MAX_AI_TASKS = 10
 
+// Use the generic optimistic wrapper type
+type OptimisticAITask = WithOptimistic<AITask>
+
+const aiTaskKey = "ai-task"
 export const aiTaskKeys = {
-  all: ["ai-task"] as const,
-  lists: () => [...aiTaskKeys.all, "list"] as const,
-  list: () => [...aiTaskKeys.lists()] as const,
-  details: () => [...aiTaskKeys.all, "detail"] as const,
-  detail: (id: string) => [...aiTaskKeys.details(), id] as const,
+  list: [aiTaskKey, "list"] as const,
+  details: [aiTaskKey, "detail"] as const,
+  detail: (id: string) => [...aiTaskKeys.details, id] as const,
+  testRun: [aiTaskKey, "test-run"] as const,
 }
 
 // Queries
 
 export const useAITaskListQuery = () => {
   const { data } = useQuery({
-    queryKey: aiTaskKeys.list(),
-    queryFn: () => followApi.aiTask.list(),
+    queryKey: aiTaskKeys.list,
+    queryFn: () => followApi.aiTask.list().then((res) => res.data),
   })
-  return data?.data
+  return data
 }
 
 export const useCanCreateNewAITask = () => {
@@ -37,7 +41,7 @@ export const useCanCreateNewAITask = () => {
 export const useAITaskQuery = (id: string | undefined, opts?: { enabled?: boolean }) => {
   const enabled = !!id && (opts?.enabled ?? true)
   const { data } = useQuery({
-    queryKey: id ? aiTaskKeys.detail(id) : aiTaskKeys.details(),
+    queryKey: id ? aiTaskKeys.detail(id) : aiTaskKeys.details,
     queryFn: () => followApi.aiTask.get({ id: id as string }),
     enabled,
   })
@@ -47,37 +51,67 @@ export const useAITaskQuery = (id: string | undefined, opts?: { enabled?: boolea
 // Mutations
 
 export const useCreateAITaskMutation = () => {
-  const qc = useQueryClient()
-  return useMutation<TaskCreateResponse, unknown, CreateTaskRequest>({
-    mutationFn: (input) => followApi.aiTask.create(input),
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: aiTaskKeys.lists() })
-    },
-  })
+  return useOptimisticMutation(
+    createOptimisticConfig.forCreate<OptimisticAITask, CreateTaskRequest, TaskCreateResponse>({
+      mutationFn: (input) => followApi.aiTask.create(input),
+      queryKey: aiTaskKeys.list,
+      generateOptimistic: (variables) => ({
+        name: variables.name,
+        prompt: variables.prompt,
+        isEnabled: variables.isEnabled ?? true,
+        schedule: variables.schedule,
+        options: variables.options ?? { notifyChannels: ["email"] },
+        userId: "temp-user",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        lastRunAt: null,
+        nextRunAt: null,
+        runCount: 0,
+        lastResult: null,
+        lastError: null,
+      }),
+
+      errorMessage: "Failed to create AI task",
+      retryable: false,
+    }),
+  )
 }
 
 export const useUpdateAITaskMutation = () => {
-  const qc = useQueryClient()
-  return useMutation<TaskUpdateResponse, unknown, UpdateTaskRequest>({
-    mutationFn: (input) => followApi.aiTask.update(input),
-    onSuccess: async (res) => {
-      const id = res?.data?.id ?? undefined
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: aiTaskKeys.lists() }),
-        id ? qc.invalidateQueries({ queryKey: aiTaskKeys.detail(id) }) : Promise.resolve(),
-      ])
-    },
-  })
+  return useOptimisticMutation(
+    createOptimisticConfig.forUpdate<OptimisticAITask, UpdateTaskRequest>({
+      mutationFn: (input) => followApi.aiTask.update(input),
+      queryKey: aiTaskKeys.list,
+      getId: (variables) => variables.id,
+      errorMessage: "Failed to update AI task",
+      retryable: false,
+    }),
+  )
 }
 
 export const useDeleteAITaskMutation = () => {
-  const qc = useQueryClient()
-  return useMutation<TaskDeleteResponse, unknown, { id: string }>({
-    mutationFn: ({ id }) => followApi.aiTask.delete({ id }),
-    onSuccess: async (_res, vars) => {
+  return useOptimisticMutation(
+    createOptimisticConfig.forDelete<OptimisticAITask, { id: string }>({
+      mutationFn: ({ id }) => followApi.aiTask.delete({ id }),
+      queryKey: aiTaskKeys.list,
+      getId: (variables) => variables.id,
+
+      errorMessage: "Failed to delete AI task",
+      retryable: false,
+    }),
+  )
+}
+
+export const useTestRunAITaskMutation = () => {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationKey: aiTaskKeys.testRun,
+    mutationFn: ({ id }: { id: string }) => followApi.aiTask.testRun({ id }, { timeout: 80000 }),
+    onSuccess: async (_res, { id }) => {
+      // Refresh task list and detail to reflect any updated run info
       await Promise.all([
-        qc.invalidateQueries({ queryKey: aiTaskKeys.lists() }),
-        qc.invalidateQueries({ queryKey: aiTaskKeys.detail(vars.id) }),
+        queryClient.invalidateQueries({ queryKey: aiTaskKeys.list }),
+        queryClient.invalidateQueries({ queryKey: aiTaskKeys.detail(id) }),
       ])
     },
   })

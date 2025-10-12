@@ -1,7 +1,8 @@
 import { useGlobalFocusableScopeSelector } from "@follow/components/common/Focusable/hooks.js"
+import { Spring } from "@follow/components/constants/spring.js"
 import { ActionButton } from "@follow/components/ui/button/index.js"
 import { RootPortal } from "@follow/components/ui/portal/index.js"
-import type { FeedViewType } from "@follow/constants"
+import { FeedViewType } from "@follow/constants"
 import { useTypeScriptHappyCallback } from "@follow/hooks"
 import { ELECTRON_BUILD } from "@follow/shared/constants"
 import { usePrefetchSubscription } from "@follow/store/subscription/hooks"
@@ -12,13 +13,18 @@ import { useWheel } from "@use-gesture/react"
 import { Lethargy } from "lethargy"
 import { AnimatePresence, m } from "motion/react"
 import type { FC, PropsWithChildren } from "react"
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 
 import { useRootContainerElement } from "~/atoms/dom"
 import { useUISettingKey } from "~/atoms/settings/ui"
-import { setTimelineColumnShow, useTimelineColumnShow } from "~/atoms/sidebar"
+import {
+  setTimelineColumnShow,
+  useSubscriptionColumnApronNode,
+  useSubscriptionColumnShow,
+} from "~/atoms/sidebar"
 import { Focusable } from "~/components/common/Focusable"
 import { HotkeyScope, ROUTE_TIMELINE_OF_VIEW } from "~/constants"
+import { useFeature } from "~/hooks/biz/useFeature"
 import { useBackHome } from "~/hooks/biz/useNavigateEntry"
 import { useReduceMotion } from "~/hooks/biz/useReduceMotion"
 import { useRouteParamsSelector } from "~/hooks/biz/useRouteParams"
@@ -96,7 +102,7 @@ export function SubscriptionColumn({
   )
 
   const shouldFreeUpSpace = useShouldFreeUpSpace()
-  const feedColumnShow = useTimelineColumnShow()
+  const feedColumnShow = useSubscriptionColumnShow()
   const rootContainerElement = useRootContainerElement()
 
   const focusableContainerRef = useRef<HTMLDivElement>(null)
@@ -129,7 +135,7 @@ export function SubscriptionColumn({
         <RootPortal to={rootContainerElement}>
           <ActionButton
             tooltip={"Toggle Feed Column"}
-            className="center left-macos-traffic-light macos:flex absolute top-2.5 z-0 hidden -translate-x-2 text-zinc-500"
+            className="center macos:left-macos-traffic-light-2 macos:flex absolute left-0 top-2.5 z-0 hidden -translate-x-2 text-zinc-500"
             onClick={() => setTimelineColumnShow(true)}
           >
             <i className="i-mgc-layout-leftbar-open-cute-re" />
@@ -137,12 +143,8 @@ export function SubscriptionColumn({
         </RootPortal>
       )}
 
-      <div className="relative mb-4 mt-3">
-        <div className="text-text-secondary flex h-11 justify-between gap-0 px-3 text-xl">
-          {timelineList.map((timelineId) => (
-            <SubscriptionTabButton key={timelineId} timelineId={timelineId} />
-          ))}
-        </div>
+      <div className="relative mb-2 mt-3">
+        <TabsRow />
       </div>
       <div
         className={cn("relative mt-1 flex size-full", !shouldFreeUpSpace && "overflow-hidden")}
@@ -176,44 +178,60 @@ export function SubscriptionColumn({
         </SwipeWrapper>
       </div>
 
+      <ApronNodeContainer />
+
       {children}
     </WindowUnderBlur>
   )
+}
+
+const ApronNodeContainer: FC = () => {
+  return useSubscriptionColumnApronNode()
 }
 
 const SwipeWrapper: FC<{ active: string; children: React.JSX.Element[] }> = memo(
   ({ children, active }) => {
     const reduceMotion = useReduceMotion()
     const timelineList = useTimelineList()
-    const index = timelineList.indexOf(active)
+    const viewIndex = timelineList.indexOf(active)
 
     const feedColumnWidth = useUISettingKey("feedColWidth")
+    const timelineTabs = useUISettingKey("timelineTabs")
     const containerRef = useRef<HTMLDivElement>(null)
 
-    const prevActiveIndexRef = useRef(-1)
+    // Use custom ordering for direction calculation
+    const orderedForDirection = useMemo(() => {
+      if (timelineList.length === 0) return [] as string[]
+      const first = timelineList[0]
+      const rest = timelineList.slice(1)
+      const savedVisible = (timelineTabs?.visible ?? []).filter((id) => rest.includes(id))
+      const ordered = [first, ...savedVisible, ...rest.filter((id) => !savedVisible.includes(id))]
+      return ordered
+    }, [timelineList, timelineTabs])
+
+    const orderIndex = orderedForDirection.indexOf(active)
+
+    const prevOrderIndexRef = useRef(-1)
     const [isReady, setIsReady] = useState(false)
 
     const [direction, setDirection] = useState<"left" | "right">("right")
-    const [currentAnimtedActive, setCurrentAnimatedActive] = useState(index)
+    const [currentAnimtedActive, setCurrentAnimatedActive] = useState(viewIndex)
 
     useLayoutEffect(() => {
-      const prevActiveIndex = prevActiveIndexRef.current
-      if (prevActiveIndex !== index) {
-        if (prevActiveIndex < index) {
-          setDirection("right")
-        } else {
-          setDirection("left")
-        }
+      const prevOrderIndex = prevOrderIndexRef.current
+      if (prevOrderIndex !== orderIndex) {
+        if (prevOrderIndex < orderIndex) setDirection("right")
+        else setDirection("left")
       }
       // eslint-disable-next-line @eslint-react/web-api/no-leaked-timeout
       setTimeout(() => {
-        setCurrentAnimatedActive(index)
+        setCurrentAnimatedActive(viewIndex)
       }, 0)
-      if (prevActiveIndexRef.current !== -1) {
+      if (prevOrderIndexRef.current !== -1) {
         setIsReady(true)
       }
-      prevActiveIndexRef.current = index
-    }, [index])
+      prevOrderIndexRef.current = orderIndex
+    }, [orderIndex, viewIndex])
 
     if (reduceMotion) {
       return <div ref={containerRef}>{children[currentAnimtedActive]}</div>
@@ -229,7 +247,7 @@ const SwipeWrapper: FC<{ active: string; children: React.JSX.Element[] }> = memo
           }
           animate={{ x: 0 }}
           exit={{ x: direction === "right" ? -feedColumnWidth : feedColumnWidth }}
-          transition={{ x: { type: "spring", stiffness: 700, damping: 40 } }}
+          transition={Spring.presets.snappy}
           ref={containerRef}
         >
           {children[currentAnimtedActive]}
@@ -238,6 +256,48 @@ const SwipeWrapper: FC<{ active: string; children: React.JSX.Element[] }> = memo
     )
   },
 )
+
+const TabsRow: FC = () => {
+  const aiEnabled = useFeature("ai")
+  const timelineList = useTimelineList()
+  const timelineTabs = useUISettingKey("timelineTabs")
+
+  if (!aiEnabled) {
+    return (
+      <div className="text-text-secondary flex h-11 items-center gap-0 px-3 text-xl">
+        {timelineList.map((timelineId, index) => (
+          <SubscriptionTabButton
+            key={timelineId}
+            timelineId={timelineId}
+            shortcut={`${index + 1}`}
+          />
+        ))}
+      </div>
+    )
+  }
+
+  const first = timelineList[0]
+  const rest = timelineList.slice(1)
+  const savedVisible = (timelineTabs?.visible ?? []).filter((id) => rest.includes(id))
+  const visible: string[] = [...savedVisible]
+  for (const id of rest) {
+    if (visible.length >= 5) break
+    if (!visible.includes(id)) visible.push(id)
+  }
+
+  return (
+    <div className="text-text-secondary flex h-11 items-center px-1 text-xl">
+      <SubscriptionTabButton
+        shortcut="BackQuote"
+        key={first}
+        timelineId={`${ROUTE_TIMELINE_OF_VIEW}${FeedViewType.All}`}
+      />
+      {visible.map((timelineId, index) => (
+        <SubscriptionTabButton key={timelineId} timelineId={timelineId} shortcut={`${index + 1}`} />
+      ))}
+    </div>
+  )
+}
 
 const CommandsHandler = ({
   setActive,

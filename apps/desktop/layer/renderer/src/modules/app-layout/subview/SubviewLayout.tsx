@@ -5,8 +5,9 @@ import { ScrollArea } from "@follow/components/ui/scroll-area/index.js"
 import { Routes } from "@follow/constants"
 import { ELECTRON_BUILD } from "@follow/shared/constants"
 import { springScrollTo } from "@follow/utils/scroller"
-import { cn, getOS } from "@follow/utils/utils"
+import { clsx, cn, getOS } from "@follow/utils/utils"
 import { m } from "framer-motion"
+import { LinearBlur } from "progressive-blur"
 import { isValidElement, useCallback, useEffect, useRef, useState } from "react"
 import { useHotkeys } from "react-hotkeys-hook"
 import { useTranslation } from "react-i18next"
@@ -20,6 +21,35 @@ import { HotkeyScope } from "~/constants"
 
 import { useSubViewRightView, useSubViewTitleValue } from "./hooks"
 
+/**
+ * SubviewLayout Component
+ *
+ * A full-screen modal-style layout for subview pages like Discover, AI, etc.
+ * This layout provides:
+ * - Fullscreen overlay with enhanced header controls
+ * - Smooth scroll behavior with progress indicators
+ * - Progressive mask blur effects
+ * - Back navigation with ESC key support
+ * - Dynamic title display based on scroll position
+ * - Configurable right-side action buttons
+ *
+ * Layout Structure:
+ * ```
+ * SubviewLayout
+ * ├── Fixed Header (progressive mask blur)
+ * │   ├── Back Button (left)
+ * │   ├── Title (center, fade in on scroll)
+ * │   └── Action Buttons (right, configurable)
+ * ├── Scrollable Content Area
+ * │   └── Outlet (renders subview pages)
+ * └── Progress FAB (bottom-right, scroll to top)
+ * ```
+ *
+ * @component
+ * @example
+ * // Used for routes like /discover, /power, /action, /rsshub
+ * // Provides full-screen modal-like experience
+ */
 export function SubviewLayout() {
   return (
     <Focusable className="contents" scope={HotkeyScope.SubLayer}>
@@ -28,6 +58,19 @@ export function SubviewLayout() {
   )
 }
 
+/**
+ * SubviewLayoutInner Component
+ *
+ * The inner implementation of SubviewLayout that handles:
+ * - Scroll state management and progress tracking
+ * - Header elevation and transparency effects
+ * - Navigation history and ESC key handling
+ * - Dynamic title visibility based on scroll position
+ * - Smooth scroll animations and auto-scroll behavior
+ *
+ * @component
+ * @internal
+ */
 function SubviewLayoutInner() {
   const navigate = useNavigate()
   const prevLocation = useRef(getReadonlyRoute().location).current
@@ -79,7 +122,7 @@ function SubviewLayoutInner() {
     ) {
       springScrollTo(0, scrollRef)
     }
-  }, [location.pathname, discoverType, scrollRef])
+  }, [location.pathname, discoverType, scrollRef, navigationType])
 
   useEffect(() => {
     const $scroll = scrollRef
@@ -122,12 +165,8 @@ function SubviewLayoutInner() {
           isHeaderElevated && isElectronWindows && "-top-5",
         )}
       >
-        <m.div
-          className={cn(
-            "mx-4 mt-4 flex items-center gap-3",
-            "transition-all duration-300 ease-out",
-          )}
-        >
+        <m.div className={cn("flex items-center gap-3 p-4", "relative")}>
+          <LinearBlur className="absolute inset-0 z-[-1]" tint="var(--fo-background)" side="top" />
           {/* Left: Back button (circular, glass) */}
           <GlassButton
             description={t("words.back", { ns: "common" })}
@@ -145,11 +184,9 @@ function SubviewLayoutInner() {
           <div className="pointer-events-none flex min-h-10 flex-1 items-center justify-center">
             {title ? (
               <div
-                className={cn(
+                className={clsx(
                   "pointer-events-auto inline-flex max-w-[60%] items-center justify-center",
-                  "rounded-full border px-8 py-2 text-center",
-                  "bg-material-thin border-border/50 backdrop-blur-background shadow-sm duration-200",
-
+                  "px-8 py-2 text-center duration-200",
                   isTitleVisible ? "opacity-100" : "opacity-0",
                 )}
               >
@@ -221,6 +258,7 @@ const SubViewHeaderRightView = ({ isHeaderElevated }: { isHeaderElevated: boolea
       <div
         className={cn(
           "bg-fill backdrop-blur-background -mt-2 inline-flex items-center gap-1.5 rounded-full p-2 duration-200",
+          "has-[:nth-child(1)]:bg-transparent",
           !isHeaderElevated && items.length > 1 ? "bg-material-ultra-thin" : "bg-material-medium",
         )}
       >
@@ -296,7 +334,7 @@ const ScrollProgressFAB = ({
           type="button"
           className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-200 group-hover/fab:opacity-100"
         >
-          <i className="i-mingcute-arow-to-up-line" />
+          <i className="i-mingcute-arrow-to-up-line" />
         </button>
       </div>
     </div>

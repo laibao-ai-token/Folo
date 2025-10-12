@@ -1,18 +1,18 @@
-import { ActionButton } from "@follow/components/ui/button/index.js"
 import { cn } from "@follow/utils/utils"
-import { memo, useCallback, useMemo, useRef } from "react"
-import { toast } from "sonner"
+import { memo, useCallback, useEffect, useMemo, useRef } from "react"
 
 import { useAISettingValue } from "~/atoms/settings/ai"
+import { useGeneralSettingKey } from "~/atoms/settings/general"
 import { DropdownMenu, DropdownMenuTrigger } from "~/components/ui/dropdown-menu/dropdown-menu"
-import { useModalStack } from "~/components/ui/modal/stacked/hooks"
+import { useRouteParamsSelector } from "~/hooks/biz/useRouteParams"
+import { useDisplayBlocks } from "~/modules/ai-chat/hooks/useDisplayBlocks"
 import { useFileUploadWithDefaults } from "~/modules/ai-chat/hooks/useFileUpload"
 import { useAIChatStore } from "~/modules/ai-chat/store/AIChatContext"
 import { SUPPORTED_MIME_ACCEPT } from "~/modules/ai-chat/utils/file-validation"
-import { useCanCreateNewAITask } from "~/modules/ai-task/query"
 
-import { AITaskModal } from "../../../ai-task/components/ai-task-modal"
-import { ContextBlock } from "../context-bar/blocks"
+import { useBlockActions } from "../../store/hooks"
+import { BlockSliceAction } from "../../store/slices/block.slice"
+import { CombinedContextBlock, ContextBlock } from "../context-bar/blocks"
 import { ContextMenuContent, ShortcutsMenuContent } from "../context-bar/menus"
 
 export const AIChatContextBar: Component<{ onSendShortcut?: (prompt: string) => void }> = memo(
@@ -21,8 +21,6 @@ export const AIChatContextBar: Component<{ onSendShortcut?: (prompt: string) => 
     const { shortcuts } = useAISettingValue()
     const fileInputRef = useRef<HTMLInputElement>(null)
     const { handleFileInputChange } = useFileUploadWithDefaults()
-    const { present } = useModalStack()
-    const canCreateNewTask = useCanCreateNewAITask()
 
     // Filter enabled shortcuts
     const enabledShortcuts = useMemo(
@@ -34,17 +32,65 @@ export const AIChatContextBar: Component<{ onSendShortcut?: (prompt: string) => 
       fileInputRef.current?.click()
     }, [])
 
-    const handleScheduleActionClick = () => {
-      if (!canCreateNewTask) {
-        toast.error("Please remove an existing task before creating a new one.")
-        return
+    const { addOrUpdateBlock, removeBlock } = useBlockActions()
+    const view = useRouteParamsSelector((i) => {
+      if (!i.isPendingEntry) return
+      return i.view
+    })
+    const feedId = useRouteParamsSelector((i) => {
+      if (i.isAllFeeds || !i.isPendingEntry) return
+      return i.feedId
+    })
+    useEffect(() => {
+      if (typeof view === "number") {
+        addOrUpdateBlock({
+          id: BlockSliceAction.SPECIAL_TYPES.mainView,
+          type: "mainView",
+          value: `${view}`,
+        })
+      } else {
+        removeBlock(BlockSliceAction.SPECIAL_TYPES.mainView)
       }
-      present({
-        title: "New AI Task",
-        canClose: true,
-        content: () => <AITaskModal />,
-      })
-    }
+
+      return () => {
+        removeBlock(BlockSliceAction.SPECIAL_TYPES.mainView)
+      }
+    }, [addOrUpdateBlock, view, removeBlock])
+
+    useEffect(() => {
+      if (feedId) {
+        addOrUpdateBlock({
+          id: BlockSliceAction.SPECIAL_TYPES.mainFeed,
+          type: "mainFeed",
+          value: feedId,
+        })
+      } else {
+        removeBlock(BlockSliceAction.SPECIAL_TYPES.mainFeed)
+      }
+      return () => {
+        removeBlock(BlockSliceAction.SPECIAL_TYPES.mainFeed)
+      }
+    }, [addOrUpdateBlock, feedId, removeBlock])
+
+    // Add unreadOnly context block only when unreadOnly is enabled
+    const unreadOnly = useGeneralSettingKey("unreadOnly")
+    useEffect(() => {
+      if (unreadOnly) {
+        addOrUpdateBlock({
+          id: BlockSliceAction.SPECIAL_TYPES.unreadOnly,
+          type: "unreadOnly",
+          value: "true",
+        })
+      } else {
+        removeBlock(BlockSliceAction.SPECIAL_TYPES.unreadOnly)
+      }
+
+      return () => {
+        removeBlock(BlockSliceAction.SPECIAL_TYPES.unreadOnly)
+      }
+    }, [addOrUpdateBlock, unreadOnly, removeBlock])
+
+    const displayBlocks = useDisplayBlocks(blocks)
 
     return (
       <div className={cn("flex flex-wrap items-center gap-2 px-4 py-3", className)}>
@@ -55,7 +101,7 @@ export const AIChatContextBar: Component<{ onSendShortcut?: (prompt: string) => 
               type="button"
               className="bg-material-medium hover:bg-material-thin border-border text-text-secondary hover:text-text-secondary flex size-7 items-center justify-center rounded-md border transition-colors"
             >
-              <i className="i-mgc-add-cute-re size-3.5" />
+              <i className="i-mgc-at-cute-re size-3.5" />
             </button>
           </DropdownMenuTrigger>
           <ContextMenuContent />
@@ -97,18 +143,21 @@ export const AIChatContextBar: Component<{ onSendShortcut?: (prompt: string) => 
           </DropdownMenu>
         )}
 
-        <ActionButton
-          className="bg-material-medium hover:bg-material-thin border-border text-text-secondary hover:text-text-secondary flex size-7 items-center justify-center rounded-md border transition-colors"
-          tooltip="Schedule Action"
-          onClick={handleScheduleActionClick}
-        >
-          <i className="i-mgc-calendar-time-add-cute-re size-3.5" />
-        </ActionButton>
-
         {/* Context Blocks */}
-        {blocks.map((block) => (
-          <ContextBlock key={block.id} block={block} />
-        ))}
+        {displayBlocks.map((item) => {
+          if (item.kind === "combined") {
+            return (
+              <CombinedContextBlock
+                key={item.viewBlock.id}
+                viewBlock={item.viewBlock}
+                feedBlock={item.feedBlock}
+                unreadOnlyBlock={item.unreadOnlyBlock}
+              />
+            )
+          }
+
+          return <ContextBlock key={item.block.id} block={item.block} />
+        })}
       </div>
     )
   },

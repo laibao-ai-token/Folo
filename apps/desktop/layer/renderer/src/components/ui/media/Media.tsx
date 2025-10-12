@@ -23,6 +23,8 @@ type BaseProps = {
   blurhash?: string
   inline?: boolean
   fitContent?: boolean
+  fitContainer?: boolean
+  videoClassName?: string
 }
 
 const isImageLoadedSet = new Set<string>()
@@ -71,6 +73,8 @@ const MediaImpl: FC<MediaProps> = ({
     width,
     inline,
     fitContent,
+    fitContainer,
+    videoClassName,
     ...rest
   } = props
 
@@ -287,7 +291,12 @@ const MediaImpl: FC<MediaProps> = ({
             )}
             onClick={handleClick}
           >
-            <VideoPreview src={src!} previewImageUrl={previewImageSrc} thumbnail={thumbnail} />
+            <VideoPreview
+              src={src!}
+              previewImageUrl={previewImageSrc}
+              thumbnail={thumbnail}
+              videoClassName={videoClassName}
+            />
           </span>
         )
       }
@@ -386,6 +395,7 @@ const MediaImpl: FC<MediaProps> = ({
           height={Number.parseInt(props.height as string)}
           containerWidth={containerWidth}
           fitContent={fitContent}
+          fitContainer={fitContainer}
         >
           <div
             className={cn(
@@ -445,6 +455,7 @@ const AspectRatio = ({
   children,
   style,
   fitContent,
+  fitContainer,
   ...props
 }: {
   width: number
@@ -456,6 +467,7 @@ const AspectRatio = ({
    * If `fit` is true, the content width may be increased to fit the container width
    */
   fitContent?: boolean
+  fitContainer?: boolean
   [key: string]: any
 }) => {
   const scaleFactor =
@@ -472,8 +484,8 @@ const AspectRatio = ({
     <div
       style={{
         position: "relative",
-        width: scaledWidth ? `${scaledWidth}px` : "100%",
-        height: scaledHeight ? `${scaledHeight}px` : "auto",
+        width: fitContainer ? "100%" : scaledWidth ? `${scaledWidth}px` : "100%",
+        height: fitContainer ? "100%" : scaledHeight ? `${scaledHeight}px` : "auto",
         ...style,
       }}
       {...props}
@@ -487,7 +499,8 @@ const VideoPreview: FC<{
   src: string
   previewImageUrl?: string
   thumbnail?: boolean
-}> = ({ src, previewImageUrl, thumbnail = false }) => {
+  videoClassName?: string
+}> = ({ src, previewImageUrl, thumbnail = false, videoClassName }) => {
   const [isInitVideoPlayer, setIsInitVideoPlayer] = useState(!previewImageUrl)
 
   const [videoRef, setVideoRef] = useState<VideoPlayerRef | null>(null)
@@ -507,7 +520,7 @@ const VideoPreview: FC<{
       {!isInitVideoPlayer ? (
         <img
           src={previewImageUrl}
-          className="size-full object-cover"
+          className={cn("size-full object-cover", videoClassName)}
           onMouseEnter={() => {
             setIsInitVideoPlayer(true)
           }}
@@ -520,7 +533,7 @@ const VideoPreview: FC<{
           poster={previewImageUrl}
           ref={setVideoRef}
           muted
-          className="not-prose relative size-full object-cover"
+          className={cn("not-prose relative size-full object-cover", videoClassName)}
         />
       )}
 

@@ -1,7 +1,9 @@
+import { views } from "@follow/constants"
 import { cn } from "@follow/utils/utils"
+import { t } from "i18next"
 import * as React from "react"
 
-import type { AIChatContextBlock } from "~/modules/ai-chat/store/types"
+import type { AIChatContextBlock, ValueContextBlock } from "~/modules/ai-chat/store/types"
 
 import {
   getBlockIcon,
@@ -18,27 +20,48 @@ interface AIDataBlockItemProps {
   index: number
 }
 
+type ValueBlockOf<Type extends ValueContextBlock["type"]> = Omit<ValueContextBlock, "type"> & {
+  type: Type
+}
+
+interface CombinedDataBlockItemProps {
+  viewBlock: ValueBlockOf<"mainView">
+  feedBlock?: ValueBlockOf<"mainFeed">
+  unreadOnlyBlock?: ValueBlockOf<"unreadOnly">
+}
+
 /**
  * Gets the display content for a context block
  */
 const getDisplayContent = (block: AIChatContextBlock): React.ReactNode => {
   switch (block.type) {
+    case "mainView": {
+      const viewName = views.find((v) => v.view === Number(block.value))?.name
+      return viewName ? t(viewName, { ns: "common" }) : block.value
+    }
     case "mainEntry":
     case "referEntry": {
       return <EntryTitle entryId={block.value} fallback={block.value} />
     }
-    case "referFeed": {
+    case "mainFeed": {
       return <FeedTitle feedId={block.value} fallback={block.value} />
     }
     case "selectedText": {
       return `"${block.value}"`
     }
+    case "unreadOnly": {
+      return "Unread Only"
+    }
     case "fileAttachment": {
       if (!block.attachment) {
         return "[File: Unknown]"
       }
+      if (block.attachment.name && !block.attachment.uploadStatus) {
+        return block.attachment.name
+      }
       return getFileDisplayContent(block.attachment)
     }
+
     default: {
       return ""
     }
@@ -77,13 +100,15 @@ const BlockIcon: React.FC<{
 BlockIcon.displayName = "BlockIcon"
 
 /**
- * Individual block item component with optimized rendering and animations
+ * Shared block container component to ensure consistency
  */
-export const AIDataBlockItem: React.FC<AIDataBlockItemProps> = React.memo(({ block }) => {
-  const styles = React.useMemo(() => getBlockStyles(block.type), [block.type])
-  const label = React.useMemo(() => getBlockLabel(block.type), [block.type])
-  const displayContent = React.useMemo(() => getDisplayContent(block), [block])
-
+const BlockContainer: React.FC<{
+  styles: ReturnType<typeof getBlockStyles>
+  block: AIChatContextBlock
+  label?: string
+  displayContent: React.ReactNode
+  title?: string
+}> = React.memo(({ styles, block, label, displayContent, title }) => {
   return (
     <div
       key={block.id}
@@ -97,11 +122,15 @@ export const AIDataBlockItem: React.FC<AIDataBlockItemProps> = React.memo(({ blo
 
       {/* Label and content */}
       <div className="flex min-w-0 items-center gap-1">
-        <span className={cn("text-xs font-medium", styles.label)}>{label}</span>
-        <span className="text-text-secondary text-xs">·</span>
+        {label && (
+          <>
+            <span className={cn("text-xs font-medium", styles.label)}>{label}</span>
+            <span className="text-text-secondary text-xs">·</span>
+          </>
+        )}
         <span
           className="text-text max-w-24 truncate text-xs font-medium"
-          title={typeof displayContent === "string" ? displayContent : undefined}
+          title={title || (typeof displayContent === "string" ? displayContent : undefined)}
         >
           {displayContent}
         </span>
@@ -110,4 +139,68 @@ export const AIDataBlockItem: React.FC<AIDataBlockItemProps> = React.memo(({ blo
   )
 })
 
+BlockContainer.displayName = "BlockContainer"
+
+/**
+ * Individual block item component with optimized rendering and animations
+ */
+export const AIDataBlockItem: React.FC<AIDataBlockItemProps> = React.memo(({ block }) => {
+  const styles = React.useMemo(() => getBlockStyles(block.type), [block.type])
+  const label = React.useMemo(() => getBlockLabel(block.type), [block.type])
+  const displayContent = React.useMemo(() => getDisplayContent(block), [block])
+
+  return (
+    <BlockContainer styles={styles} block={block} label={label} displayContent={displayContent} />
+  )
+})
+
 AIDataBlockItem.displayName = "AIDataBlockItem"
+
+/**
+ * Combined block item component for main view with optional feed and unread filter
+ * Displays view icon with appropriate content based on available blocks
+ */
+export const CombinedDataBlockItem: React.FC<CombinedDataBlockItemProps> = React.memo(
+  ({ viewBlock, feedBlock, unreadOnlyBlock }) => {
+    const { styles, displayContent, title } = React.useMemo(() => {
+      const view = views.find((v) => v.view === Number(viewBlock.value))
+      const viewName = view?.name ? t(view.name, { ns: "common" }) : viewBlock.value
+
+      const unreadOnlyText = unreadOnlyBlock ? " (Unread Only)" : ""
+
+      // Determine content based on whether feedBlock exists
+      const content = feedBlock ? (
+        <span className="flex items-center gap-1">
+          <FeedTitle feedId={feedBlock.value} fallback={feedBlock.value} />
+          {unreadOnlyBlock && <i className="i-mgc-round-cute-fi size-3" title="Unread Only" />}
+        </span>
+      ) : (
+        <span className="flex items-center gap-1">
+          {viewName}
+          {unreadOnlyBlock && <i className="i-mgc-round-cute-fi size-3" title="Unread Only" />}
+        </span>
+      )
+
+      const titleText = feedBlock
+        ? `${viewName} - ${feedBlock.value}${unreadOnlyText}`
+        : `${viewName}${unreadOnlyText}`
+
+      return {
+        styles: getBlockStyles("mainView"),
+        displayContent: content,
+        title: titleText,
+      }
+    }, [viewBlock.value, feedBlock, unreadOnlyBlock])
+
+    return (
+      <BlockContainer
+        styles={styles}
+        block={viewBlock}
+        displayContent={displayContent}
+        title={title}
+      />
+    )
+  },
+)
+
+CombinedDataBlockItem.displayName = "CombinedDataBlockItem"

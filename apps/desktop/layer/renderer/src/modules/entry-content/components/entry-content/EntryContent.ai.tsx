@@ -4,10 +4,11 @@ import { RootPortal } from "@follow/components/ui/portal/index.js"
 import { ScrollArea } from "@follow/components/ui/scroll-area/index.js"
 import { FeedViewType } from "@follow/constants"
 import { useTitle } from "@follow/hooks"
-import type { FeedModel } from "@follow/models/types"
 import { useEntry } from "@follow/store/entry/hooks"
 import { useFeedById } from "@follow/store/feed/hooks"
+import type { FeedModel } from "@follow/store/feed/types"
 import { useIsInbox } from "@follow/store/inbox/hooks"
+import { useSubscriptionByFeedId } from "@follow/store/subscription/hooks"
 import { thenable } from "@follow/utils"
 import { stopPropagation } from "@follow/utils/dom"
 import { EventBus } from "@follow/utils/event-bus"
@@ -18,10 +19,8 @@ import * as React from "react"
 import { memo, useEffect, useRef, useState } from "react"
 
 import { useEntryIsInReadability } from "~/atoms/readability"
-import { useIsZenMode } from "~/atoms/settings/ui"
 import { Focusable } from "~/components/common/Focusable"
 import { m } from "~/components/common/Motion"
-import { useInPeekModal } from "~/components/ui/modal/inspire/InPeekModal"
 import { HotkeyScope } from "~/constants"
 import { useRouteParamsSelector } from "~/hooks/biz/useRouteParams"
 import { useFeedSafeUrl } from "~/hooks/common/useFeedSafeUrl"
@@ -30,14 +29,16 @@ import { BlockSliceAction } from "~/modules/ai-chat/store/slices/block.slice"
 import { COMMAND_ID } from "~/modules/command/commands/id"
 
 import { ApplyEntryActions } from "../../ApplyEntryActions"
+import { setEntryContentScrollToTop } from "../../atoms"
 import { useEntryContent } from "../../hooks"
-import { AIEntryHeader } from "../entry-header"
 import { getEntryContentLayout } from "../layouts"
 import { SourceContentPanel } from "../SourceContentView"
 import { EntryCommandShortcutRegister } from "./EntryCommandShortcutRegister"
+import { EntryContentFallback } from "./EntryContentFallback"
 import { EntryContentLoading } from "./EntryContentLoading"
 import { EntryNoContent } from "./EntryNoContent"
 import { EntryScrollingAndNavigationHandler } from "./EntryScrollingAndNavigationHandler.js"
+import { EntryTitleMetaHandler } from "./EntryTitleMetaHandler"
 import type { EntryContentProps } from "./types"
 
 const contentVariants = {
@@ -50,7 +51,6 @@ const EntryContentImpl: Component<EntryContentProps> = ({
   noMedia,
   className,
   compact,
-  classNames,
 }) => {
   const entry = useEntry(entryId, (state) => {
     const { feedId, inboxHandle } = state
@@ -58,21 +58,23 @@ const EntryContentImpl: Component<EntryContentProps> = ({
 
     return { feedId, inboxId: inboxHandle, title, url }
   })
+
   if (!entry) throw thenable
 
   useTitle(entry.title)
   const feed = useFeedById(entry.feedId)
+  const subscription = useSubscriptionByFeedId(entry.feedId)
 
   const isInbox = useIsInbox(entry.inboxId)
   const isInReadabilityMode = useEntryIsInReadability(entryId)
 
   const { error, content, isPending } = useEntryContent(entryId)
 
-  const view = useRouteParamsSelector((route) => route.view)
-  const scrollerRef = useRef<HTMLDivElement | null>(null)
+  const routeView = useRouteParamsSelector((route) => route.view)
+  const subscriptionView = subscription?.view
+  const view = typeof subscriptionView === "number" ? subscriptionView : routeView
+  const [scrollerRef, setScrollerRef] = useState<HTMLDivElement | null>(null)
   const safeUrl = useFeedSafeUrl(entryId)
-
-  const isZenMode = useIsZenMode()
 
   const [panelPortalElement, setPanelPortalElement] = useState<HTMLDivElement | null>(null)
 
@@ -93,6 +95,7 @@ const EntryContentImpl: Component<EntryContentProps> = ({
     })
     return () => {
       removeBlock(BlockSliceAction.SPECIAL_TYPES.mainEntry)
+      removeBlock(BlockSliceAction.SPECIAL_TYPES.selectedText)
     }
   }, [addOrUpdateBlock, entryId, removeBlock])
   const animationController = useAnimationControls()
@@ -107,14 +110,28 @@ const EntryContentImpl: Component<EntryContentProps> = ({
     }
   }, [animationController, entryId])
 
+  useEffect(() => {
+    setEntryContentScrollToTop(true)
+  }, [entryId])
+  useEffect(() => {
+    if (!scrollerRef) return
+
+    const handler = () => {
+      setEntryContentScrollToTop(scrollerRef.scrollTop < 50)
+    }
+    scrollerRef.addEventListener("scroll", handler)
+
+    return () => {
+      scrollerRef.removeEventListener("scroll", handler)
+    }
+  }, [scrollerRef])
+
+  const scrollerRefObject = React.useMemo(() => ({ current: scrollerRef }), [scrollerRef])
   return (
     <div className={cn(className, "@container flex flex-col")}>
+      <EntryTitleMetaHandler entryId={entryId} />
       <EntryCommandShortcutRegister entryId={entryId} view={view} />
-      <AIEntryHeader
-        entryId={entryId}
-        className={cn("absolute inset-x-0 top-0", classNames?.header)}
-        compact={compact}
-      />
+
       <div className="w-full" ref={setPanelPortalElement} />
 
       <Focusable
@@ -125,15 +142,15 @@ const EntryContentImpl: Component<EntryContentProps> = ({
         <RootPortal to={panelPortalElement}>
           <EntryScrollingAndNavigationHandler
             scrollAnimationRef={scrollAnimationRef}
-            scrollerRef={scrollerRef}
+            scrollerRef={scrollerRefObject}
           />
         </RootPortal>
-        {/* <EntryTimeline entryId={entryId} className="top-48" /> */}
-        <EntryScrollArea scrollerRef={scrollerRef} viewportClassName="pt-[95px]">
+
+        <EntryScrollArea scrollerRef={setScrollerRef}>
           {/* Indicator for the entry */}
-          {!isZenMode && isInHasTimelineView && (
+          {isInHasTimelineView && (
             <>
-              <div className="absolute inset-y-0 left-0 z-[9] flex w-12 items-center justify-center opacity-40 duration-200 hover:opacity-100">
+              <div className="absolute inset-y-0 left-0 z-[9] flex w-12 items-center justify-center opacity-0 duration-200 hover:opacity-100 group-hover:opacity-40">
                 <MotionButtonBase
                   // -12： Visual center point
                   className="absolute left-0 shrink-0 !-translate-y-12 cursor-pointer"
@@ -145,7 +162,7 @@ const EntryContentImpl: Component<EntryContentProps> = ({
                 </MotionButtonBase>
               </div>
 
-              <div className="absolute inset-y-0 right-0 z-[9] flex w-12 items-center justify-center opacity-40 duration-200 hover:opacity-100">
+              <div className="absolute inset-y-0 right-0 z-[9] flex w-12 items-center justify-center opacity-0 duration-200 hover:opacity-100 group-hover:opacity-40">
                 <MotionButtonBase
                   className="absolute right-0 shrink-0 !-translate-y-12 cursor-pointer"
                   onClick={() => {
@@ -167,7 +184,7 @@ const EntryContentImpl: Component<EntryContentProps> = ({
             <article
               data-testid="entry-render"
               onContextMenu={stopPropagation}
-              className={"relative w-full min-w-0 pb-10 pt-2"}
+              className={"relative w-full min-w-0 pb-10 pt-12"}
             >
               <ApplyEntryActions entryId={entryId} key={entryId} />
 
@@ -202,22 +219,21 @@ const EntryContentImpl: Component<EntryContentProps> = ({
         </EntryScrollArea>
         <SourceContentPanel src={safeUrl ?? "#"} />
       </Focusable>
-
-      {/* <React.Suspense>{!isInPeekModal && <AISmartSidebar entryId={entryId} />}</React.Suspense> */}
     </div>
   )
 }
-export const EntryContent = memo(EntryContentImpl)
+export const EntryContent: Component<EntryContentProps> = memo((props) => {
+  return (
+    <EntryContentFallback entryId={props.entryId}>
+      <EntryContentImpl {...props} />
+    </EntryContentFallback>
+  )
+})
 
 const EntryScrollArea: Component<{
-  scrollerRef: React.RefObject<HTMLDivElement | null>
+  scrollerRef: React.Ref<HTMLDivElement | null>
   viewportClassName?: string
 }> = ({ children, className, scrollerRef, viewportClassName }) => {
-  const isInPeekModal = useInPeekModal()
-
-  if (isInPeekModal) {
-    return <div className="p-5">{children}</div>
-  }
   return (
     <ScrollArea.ScrollArea
       focusable

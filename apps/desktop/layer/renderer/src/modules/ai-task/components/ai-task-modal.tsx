@@ -11,51 +11,28 @@ import { Label } from "@follow/components/ui/label/index.jsx"
 import type { AITask } from "@follow-app/client-sdk"
 import { zodResolver } from "@hookform/resolvers/zod"
 import dayjs from "dayjs"
+import type { GlobalError } from "react-hook-form"
 import { useForm } from "react-hook-form"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
-import { z } from "zod"
 
 import { useCurrentModal } from "~/components/ui/modal/stacked/hooks"
+import { AIPersistService } from "~/modules/ai-chat/services"
 import { useCreateAITaskMutation, useUpdateAITaskMutation } from "~/modules/ai-task/query"
-import type { ScheduleType } from "~/modules/ai-task/types"
-import { scheduleSchema } from "~/modules/ai-task/types"
+import type { ScheduleType, TaskFormData } from "~/modules/ai-task/types"
+import { MAX_PROMPT_LENGTH, taskSchema } from "~/modules/ai-task/types"
+import { useSettingModal } from "~/modules/settings/modal/use-setting-modal-hack"
 
+import { NotifyChannelsConfig } from "./notify-channels-config"
 import { ScheduleConfig } from "./schedule-config"
-
-const MAX_PROMPT_LENGTH = 2000
-
-const taskSchema = z
-  .object({
-    title: z.string().min(1, "Title is required").max(50, "Title must be less than 50 characters"),
-    prompt: z
-      .string()
-      .min(1, "Prompt is required")
-      .max(MAX_PROMPT_LENGTH, "Prompt must be less than 2000 characters"),
-    schedule: scheduleSchema,
-  })
-  .refine(
-    (data) => {
-      // Validate that for "once" type, the date is in the future
-      if (data.schedule.type === "once") {
-        const scheduledDate = dayjs(data.schedule.date)
-        const now = dayjs()
-        return scheduledDate.isAfter(now)
-      }
-      return true
-    },
-    {
-      message: "Scheduled date must be in the future",
-      path: ["schedule", "date"],
-    },
-  )
-
-type TaskFormData = z.infer<typeof taskSchema>
 
 interface AITaskModalProps {
   task?: AITask // Existing task for editing (optional)
   prompt?: string
-  onSubmit?: (data: TaskFormData) => void
+  /**
+   * Explicitly control whether to show the "open settings" tip/link.
+   */
+  showSettingsTip?: boolean
 }
 
 // Convert existing task data to form format or use defaults
@@ -66,12 +43,13 @@ const getDefaultFormData = (task?: AITask, prompt?: string): TaskFormData => {
   if (!task) {
     // Default values for creating new task
     return {
-      title: "AI Task",
+      name: "AI Task",
       prompt: prompt || "",
       schedule: {
         type: "once",
         date: now.add(1, "hour").toISOString(),
       },
+      options: { notifyChannels: ["email"] },
     }
   }
   if (prompt) {
@@ -122,17 +100,19 @@ const getDefaultFormData = (task?: AITask, prompt?: string): TaskFormData => {
   }
 
   return {
-    title: task.name,
+    name: task.name,
     prompt: task.prompt,
     schedule: formSchedule,
+    options: { notifyChannels: ["email"], ...task.options },
   }
 }
 
-export const AITaskModal = ({ task, prompt, onSubmit }: AITaskModalProps) => {
+export const AITaskModal = ({ task, prompt, showSettingsTip = false }: AITaskModalProps) => {
   const { dismiss } = useCurrentModal()
   const createAITaskMutation = useCreateAITaskMutation()
   const updateAITaskMutation = useUpdateAITaskMutation()
   const { t } = useTranslation("ai")
+  const settingModalPresent = useSettingModal()
 
   const isEditing = !!task
 
@@ -142,44 +122,45 @@ export const AITaskModal = ({ task, prompt, onSubmit }: AITaskModalProps) => {
   })
 
   const scheduleValue = form.watch("schedule")
+  const notifyChannelsValue = form.watch("options.notifyChannels")
 
   const handleScheduleChange = (newSchedule: ScheduleType) => {
     form.setValue("schedule", newSchedule)
   }
 
   const handleSubmit = async (data: TaskFormData) => {
-    try {
-      // Process the form data to ensure proper datetime format
-      const processedData = {
-        ...data,
-        schedule: data.schedule,
-      }
-
-      if (isEditing) {
-        // Update existing task
-        await updateAITaskMutation.mutateAsync({
+    // The optimistic mutations handle success/error toasts and error cases automatically
+    if (isEditing) {
+      // Update existing task
+      updateAITaskMutation.mutate(
+        {
           id: task.id,
-          name: processedData.title,
-          prompt: processedData.prompt,
-          schedule: processedData.schedule,
-        })
-        toast.success(t("tasks.toast.updated"))
-      } else {
-        // Create new task
-        await createAITaskMutation.mutateAsync({
-          name: processedData.title,
-          prompt: processedData.prompt,
-          schedule: processedData.schedule,
-        })
-        toast.success(t("tasks.toast.created"))
-      }
-
-      // Call the optional onSubmit callback
-      onSubmit?.(processedData)
-      dismiss()
-    } catch (error) {
-      console.error(`Failed to update/create AI task:`, error)
-      toast.error(isEditing ? t("tasks.toast.update_error") : t("tasks.toast.create_error"))
+          ...data,
+        },
+        {
+          onSuccess: async () => {
+            // If task name changed, sync the AI chat session title (chatId === task.id)
+            const trimmedTitle = data.name?.trim()
+            if (trimmedTitle) {
+              try {
+                await AIPersistService.updateSessionTitle(task.id, trimmedTitle)
+              } catch (err) {
+                console.error("Failed to update AI session title:", err, task, data)
+              }
+            }
+            toast.success(t("tasks.toast.updated"))
+            dismiss()
+          },
+        },
+      )
+    } else {
+      // Create new task
+      createAITaskMutation.mutate(data, {
+        onSuccess: () => {
+          toast.success(t("tasks.toast.created"))
+          dismiss()
+        },
+      })
     }
   }
 
@@ -200,7 +181,7 @@ export const AITaskModal = ({ task, prompt, onSubmit }: AITaskModalProps) => {
               <Label className="text-text pl-2 text-sm font-medium">{t("tasks.name")}</Label>
               <FormField
                 control={form.control}
-                name="title"
+                name="name"
                 render={({ field }) => (
                   <FormItem>
                     <FormControl>
@@ -223,7 +204,7 @@ export const AITaskModal = ({ task, prompt, onSubmit }: AITaskModalProps) => {
             <ScheduleConfig
               value={scheduleValue}
               onChange={handleScheduleChange}
-              errors={form.formState.errors.schedule as Record<string, string>}
+              errors={form.formState.errors.schedule as Record<string, GlobalError>}
             />
           </div>
 
@@ -264,10 +245,32 @@ export const AITaskModal = ({ task, prompt, onSubmit }: AITaskModalProps) => {
             </div>
           </div>
 
+          {/* Notification Channels Section */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <i className="i-mgc-notification-cute-re text-text-secondary size-4" />
+              <h3 className="text-text text-sm font-medium">{t("tasks.section.notifications")}</h3>
+            </div>
+            <NotifyChannelsConfig
+              value={notifyChannelsValue}
+              onChange={(channels) => form.setValue("options.notifyChannels", channels)}
+            />
+          </div>
+
           {/* Form Actions */}
 
-          <div className="flex items-center justify-between">
-            <div />
+          <div className="flex items-center justify-end">
+            {showSettingsTip && (
+              <button
+                type="button"
+                onClick={() => settingModalPresent("ai")}
+                className="text-text-tertiary hover:text-text-secondary mr-auto flex items-center gap-1 text-xs underline-offset-2 hover:underline disabled:opacity-50"
+                disabled={currentMutation.isPending}
+              >
+                <i className="i-mgc-settings-7-cute-re size-3" />
+                {t("tasks.view_in_settings")}
+              </button>
+            )}
             <div className="flex gap-3">
               <Button
                 type="button"
@@ -279,19 +282,13 @@ export const AITaskModal = ({ task, prompt, onSubmit }: AITaskModalProps) => {
                 {t("words.cancel", { ns: "common" })}
               </Button>
               <Button type="submit" size="sm" disabled={currentMutation.isPending}>
-                {currentMutation.isPending ? (
-                  <>
-                    <i className="i-mgc-loading-3-cute-re mr-2 size-4 animate-spin" />
-                    {isEditing ? t("tasks.actions.updating") : t("tasks.actions.scheduling")}
-                  </>
-                ) : (
-                  <>
-                    <i
-                      className={`mr-2 size-4 ${isEditing ? "i-mgc-edit-cute-re" : "i-mgc-calendar-time-add-cute-re"}`}
-                    />
-                    {isEditing ? t("tasks.actions.update") : t("tasks.actions.schedule")}
-                  </>
-                )}
+                {currentMutation.isPending
+                  ? isEditing
+                    ? t("tasks.actions.updating")
+                    : t("tasks.actions.scheduling")
+                  : isEditing
+                    ? t("tasks.actions.update")
+                    : t("tasks.actions.schedule")}
               </Button>
             </div>
           </div>

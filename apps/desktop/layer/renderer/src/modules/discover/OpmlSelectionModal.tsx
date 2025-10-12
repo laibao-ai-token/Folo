@@ -3,9 +3,9 @@ import { Checkbox } from "@follow/components/ui/checkbox/index.jsx"
 import { Input } from "@follow/components/ui/input/index.js"
 import { ScrollArea } from "@follow/components/ui/scroll-area/index.js"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@follow/components/ui/tooltip/index.jsx"
-import type { BizRespose } from "@follow/models"
 import { subscriptionSyncService } from "@follow/store/subscription/store"
 import { cn } from "@follow/utils/utils"
+import type { ExtractResponseData, SubscriptionParseOpmlResponse } from "@follow-app/client-sdk"
 import { useMutation } from "@tanstack/react-query"
 import Fuse from "fuse.js"
 import { useCallback, useMemo, useState } from "react"
@@ -13,22 +13,17 @@ import { Trans, useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
 import { useCurrentModal } from "~/components/ui/modal/stacked/hooks"
-import { apiFetch } from "~/lib/api-fetch"
+import { followClient } from "~/lib/api-client"
 import { toastFetchError } from "~/lib/error-parser"
 
-import type { ParsedFeedItem, ParsedOpmlData } from "./types"
+import type { ParsedFeedItem } from "./types"
 
-type FeedResponseList = {
-  id: string
-  url: string
-  title: string | null
-}[]
 export const OpmlSelectionModal = ({
   parsedData,
 
   file,
 }: {
-  parsedData: ParsedOpmlData
+  parsedData: ExtractResponseData<SubscriptionParseOpmlResponse>
 
   file: File
 }) => {
@@ -41,16 +36,7 @@ export const OpmlSelectionModal = ({
       formData.append("file", file)
       formData.append("items", JSON.stringify(selectedItems.map((i) => i.url)))
 
-      const { data } = await apiFetch<
-        BizRespose<{
-          successfulItems: FeedResponseList
-          conflictItems: FeedResponseList
-          parsedErrorItems: FeedResponseList
-        }>
-      >("/subscriptions/import", {
-        method: "POST",
-        body: formData,
-      })
+      const { data } = await followClient.api.subscriptions.import(formData)
 
       return data
     },
@@ -200,7 +186,7 @@ export const OpmlSelectionModal = ({
     filteredSelectedCount > 0 && filteredSelectedCount < filteredSubscriptions.length
 
   return (
-    <div className="mx-auto flex h-full w-[600px] max-w-full flex-col">
+    <div className="flex h-full max-w-full flex-col">
       <div className="mb-4">
         <h3 className="mb-2 text-lg font-semibold">
           {t("discover.import.select_feeds_to_import")}
@@ -280,7 +266,7 @@ export const OpmlSelectionModal = ({
       </div>
 
       <label
-        className="mb-4 flex items-center gap-3 rounded-lg px-3 py-2"
+        className="mb-4 flex items-center gap-3 rounded-lg px-1 py-2"
         htmlFor="select-all-filtered-feeds"
       >
         <Checkbox
@@ -309,7 +295,7 @@ export const OpmlSelectionModal = ({
         </span>
       </label>
 
-      <ScrollArea.ScrollArea rootClassName="-mx-2 flex-1 px-2">
+      <ScrollArea.ScrollArea rootClassName="-mx-4 flex-1 px-2">
         <div className="space-y-2">
           {filteredSubscriptions.length === 0 && searchQuery.trim() ? (
             <div className="text-text-secondary py-8 text-center">
@@ -318,23 +304,20 @@ export const OpmlSelectionModal = ({
           ) : (
             filteredSubscriptions.map(({ item, refIndex }) => {
               const isSelected = selectedItems.has(refIndex.toString())
+
               const wouldExceedQuota = !isSelected && selectedCount >= parsedData.remaining
 
               return (
                 <div
                   key={`${item.url}-${refIndex}`}
                   className={cn(
-                    "flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-colors",
+                    "cursor-button hover:bg-material-medium flex items-center gap-3 rounded-lg border p-3 transition-colors",
                     isSelected ? "border-material-thick bg-material-thick" : "border-background",
                     wouldExceedQuota && "cursor-not-allowed opacity-50",
                   )}
                   onClick={() => !wouldExceedQuota && toggleItem(refIndex.toString())}
                 >
-                  <Checkbox
-                    checked={isSelected}
-                    onCheckedChange={() => !wouldExceedQuota && toggleItem(refIndex.toString())}
-                    disabled={wouldExceedQuota}
-                  />
+                  <Checkbox checked={isSelected} disabled={wouldExceedQuota} />
                   <div className="min-w-0 flex-1 shrink">
                     <div className="truncate font-medium">{item.title || "Untitled Feed"}</div>
                     <div className="text-text-secondary truncate text-sm">{item.url}</div>
@@ -351,7 +334,7 @@ export const OpmlSelectionModal = ({
         </div>
       </ScrollArea.ScrollArea>
 
-      <div className="mt-4 flex justify-end gap-3 pt-4">
+      <div className="mt-4 flex justify-end gap-3">
         <Button variant="outline" onClick={dismiss} disabled={importMutation.isPending}>
           Cancel
         </Button>

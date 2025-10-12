@@ -15,34 +15,34 @@ interface AIModelIndicatorProps {
   onModelChange?: (model: string) => void
 }
 
-type ProviderType = "openai" | "anthropic" | "google" | "meta"
+type ProviderType = "openai" | "google" | "auto" | "deepseek"
 
 const providerIcons: Record<ProviderType, string> = {
-  openai: "i-simple-icons-openai",
-  anthropic: "i-simple-icons-anthropic",
-  google: "i-simple-icons-google",
-  meta: "i-simple-icons-meta",
+  auto: "i-mgc-folo-bot-original size-4 -ml-0.5",
+  openai: "i-mgc-openai-original",
+  google: "i-simple-icons-googlegemini",
+  deepseek: "i-mgc-deepseek-original",
 }
 
 const AIModelNameMapping = {
-  "gpt-4o": "GPT-4o",
-  "gpt-4o-mini": "GPT-4o mini",
-  "gpt-4": "GPT-4",
+  auto: "Auto",
   "gpt-5": "GPT-5",
   "gpt-5-mini": "GPT-5 mini",
   "gpt-5-nano": "GPT-5 nano",
+  "gemini-2.5-pro": "Gemini 2.5 Pro",
+  "deepseek-v3.2-exp-thinking": "DeepSeek V3.2 Exp Thinking",
 }
 
 const parseModelString = (modelString: string) => {
-  if (!modelString || !modelString.includes("/")) {
-    return { provider: "openai" as ProviderType, modelName: modelString || "Unknown" }
+  if (!modelString || !modelString.includes("/") || modelString === "auto") {
+    return { provider: "auto" as ProviderType, modelName: modelString || "Unknown" }
   }
 
   const [provider, ...modelParts] = modelString.split("/")
   const modelName = modelParts.join("/")
 
   return {
-    provider: (provider as ProviderType) || "openai",
+    provider: (provider as ProviderType) || "auto",
     modelName: modelName || "Unknown",
   }
 }
@@ -55,7 +55,7 @@ export const AIModelIndicator = memo(({ className, onModelChange }: AIModelIndic
     return parseModelString(currentModel || defaultModel || "")
   }, [currentModel, defaultModel])
 
-  const iconClass = providerIcons[provider] || providerIcons.openai
+  const iconClass = providerIcons[provider] || providerIcons.auto
   const hasMultipleModels = availableModels && availableModels.length > 1
 
   const modelContent = (
@@ -66,7 +66,8 @@ export const AIModelIndicator = memo(({ className, onModelChange }: AIModelIndic
           ? "hover:bg-material-medium cursor-button"
           : "hover:bg-material-medium/50",
         "duration-200",
-        "gap-1.5 px-2 py-1 text-xs",
+        "gap-1.5 p-1 text-xs",
+        hasMultipleModels && "px-2",
         "bg-material-ultra-thin border-border/50",
         "text-text-secondary",
 
@@ -74,7 +75,9 @@ export const AIModelIndicator = memo(({ className, onModelChange }: AIModelIndic
       )}
     >
       <i className={cn("size-3", iconClass)} />
-      <span className="max-w-20 truncate">{AIModelNameMapping[modelName] || modelName}</span>
+      <span className="@md:inline hidden max-w-20 truncate">
+        {AIModelNameMapping[modelName] || modelName}
+      </span>
       {hasMultipleModels && <i className="i-mingcute-down-line size-3 opacity-60" />}
     </div>
   )
@@ -89,7 +92,7 @@ export const AIModelIndicator = memo(({ className, onModelChange }: AIModelIndic
       <DropdownMenuContent align="end" className="min-w-48">
         {availableModels.map((model) => {
           const { provider: itemProvider, modelName: itemModelName } = parseModelString(model)
-          const itemIconClass = providerIcons[itemProvider] || providerIcons.openai
+          const itemIconClass = providerIcons[itemProvider] || providerIcons.auto
           const isSelected = model === (currentModel || defaultModel)
 
           const handleModelSelect = () => {

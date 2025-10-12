@@ -1,14 +1,14 @@
 import { useScrollElementUpdate } from "@follow/components/ui/scroll-area/hooks.js"
 import { ResponsiveSelect } from "@follow/components/ui/select/responsive.js"
 import { Skeleton } from "@follow/components/ui/skeleton/index.jsx"
-import { views } from "@follow/constants"
+import { FeedViewType, views } from "@follow/constants"
 import { cn } from "@follow/utils/utils"
 import { useQuery } from "@tanstack/react-query"
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { setUISetting, useUISettingKey } from "~/atoms/settings/ui"
-import { apiClient } from "~/lib/api-fetch"
+import { followClient } from "~/lib/api-client"
 
 import { TrendingFeedCard } from "../discover/TrendingFeedCard"
 
@@ -34,10 +34,12 @@ const viewOptions = [
     label: "words.all",
     value: "all",
   },
-  ...views.map((view) => ({
-    label: view.name,
-    value: `${view.view}`,
-  })),
+  ...views
+    .filter((view) => view.view !== FeedViewType.All)
+    .map((view) => ({
+      label: view.name,
+      value: `${view.view}`,
+    })),
 ]
 
 type View = (typeof viewOptions)[number]["value"]
@@ -61,12 +63,10 @@ export function Trending({
   const { data, isLoading } = useQuery({
     queryKey: ["trending", lang, selectedView],
     queryFn: async () => {
-      return await apiClient.trending.feeds.$get({
-        query: {
-          language: lang === "all" ? undefined : lang,
-          view: selectedView === "all" ? undefined : Number(selectedView),
-          limit,
-        },
+      return await followClient.api.trending.getFeeds({
+        language: lang === "all" ? undefined : lang,
+        view: selectedView === "all" ? undefined : Number(selectedView),
+        limit,
       })
     },
     meta: {

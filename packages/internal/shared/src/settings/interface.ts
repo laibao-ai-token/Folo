@@ -5,7 +5,6 @@ export interface GeneralSettings {
   translationMode: "bilingual" | "translation-only"
   summary: boolean
   actionLanguage: string
-  startupScreen: "subscription" | "timeline"
   sendAnonymousData: boolean
   unreadOnly: boolean
   scrollMarkUnread: boolean
@@ -51,6 +50,11 @@ export interface UISettings {
   accentColor: AccentColor
   entryColWidth: number
   aiColWidth: number
+  /**
+   * Dedicated AI panel width for `FeedViewType.All`.
+   * If not set, the runtime default falls back to half of the window width.
+   */
+  aiColWidthAll?: number
   feedColWidth: number
   opaqueSidebar: boolean
   sidebarShowUnreadCount: boolean
@@ -74,6 +78,7 @@ export interface UISettings {
 
   // view
   pictureViewMasonry: boolean
+  pictureViewImageOnly: boolean
   wideMode: boolean
   contentFontSize: number
   dateFormat: string
@@ -91,6 +96,12 @@ export interface UISettings {
 
   // Discover
   discoverLanguage: "all" | "eng" | "cmn"
+
+  // Desktop: Timeline tabs preset (excluding the first fixed tab)
+  timelineTabs: {
+    visible: string[]
+    hidden: string[]
+  }
 }
 
 export interface IntegrationSettings {

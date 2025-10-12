@@ -1,9 +1,8 @@
-import { useEntry, useEntryReadHistory } from "@follow/store/entry/hooks"
+import { useEntry } from "@follow/store/entry/hooks"
 import { useFeedById } from "@follow/store/feed/hooks"
 import { useInboxById } from "@follow/store/inbox/hooks"
 import { useEntryTranslation } from "@follow/store/translation/hooks"
-import { useWhoami } from "@follow/store/user/hooks"
-import { formatEstimatedMins, formatTimeToSeconds } from "@follow/utils"
+import { cn, formatEstimatedMins, formatTimeToSeconds } from "@follow/utils"
 import { titleCase } from "title-case"
 import { useShallow } from "zustand/shallow"
 
@@ -18,14 +17,21 @@ import { FeedIcon } from "~/modules/feed/feed-icon"
 import { getPreferredTitle } from "~/store/feed/hooks"
 
 import { EntryTranslation } from "../../entry-column/translation"
+import { EntryReadHistory } from "./entry-read-history"
 
 interface EntryLinkProps {
   entryId: string
   compact?: boolean
+  containerClassName?: string
+  noRecentReader?: boolean
 }
 
-export const EntryTitle = ({ entryId, compact }: EntryLinkProps) => {
-  const user = useWhoami()
+export const EntryTitle = ({
+  entryId,
+  compact,
+  containerClassName,
+  noRecentReader,
+}: EntryLinkProps) => {
   const entry = useEntry(
     entryId,
     useShallow((state) => {
@@ -58,10 +64,10 @@ export const EntryTitle = ({ entryId, compact }: EntryLinkProps) => {
     }),
   )
 
+  const hideRecentReader = useUISettingKey("hideRecentReader")
+
   const feed = useFeedById(entry?.feedId)
   const inbox = useInboxById(entry?.inboxId)
-  const data = useEntryReadHistory(entryId)
-  const entryHistory = data?.entryReadHistories
   const populatedFullHref = useFeedSafeUrl(entryId)
   const enableTranslation = useShowAITranslation()
   const actionLanguage = useActionLanguage()
@@ -75,13 +81,11 @@ export const EntryTitle = ({ entryId, compact }: EntryLinkProps) => {
 
   const navigateEntry = useNavigateEntry()
 
-  const hideRecentReader = useUISettingKey("hideRecentReader")
-
   if (!entry) return null
 
   return compact ? (
     <div className="cursor-button @sm:-mx-3 @sm:p-3 -mx-6 flex items-center gap-2 rounded-lg p-6 transition-colors">
-      <FeedIcon fallback feed={feed || inbox} entry={entry.iconEntry} size={50} />
+      <FeedIcon fallback target={feed || inbox} entry={entry.iconEntry} size={50} />
       <div className="leading-6">
         <div className="flex items-center gap-1 text-base font-semibold">
           <span>{entry.author || feed?.title || inbox?.title}</span>
@@ -92,7 +96,7 @@ export const EntryTitle = ({ entryId, compact }: EntryLinkProps) => {
       </div>
     </div>
   ) : (
-    <div className="group relative block min-w-0 rounded-lg">
+    <div className={cn("group relative block min-w-0", containerClassName)}>
       <div className="flex flex-col gap-3">
         <a
           href={populatedFullHref ?? "#"}
@@ -120,7 +124,7 @@ export const EntryTitle = ({ entryId, compact }: EntryLinkProps) => {
                 })
               }
             >
-              <FeedIcon fallback feed={feed || inbox} entry={entry.iconEntry} size={16} />
+              <FeedIcon fallback target={feed || inbox} entry={entry.iconEntry} size={16} />
               {getPreferredTitle(feed || inbox, entry.titleEntry)}
             </div>
 
@@ -155,21 +159,10 @@ export const EntryTitle = ({ entryId, compact }: EntryLinkProps) => {
                 <span className="text-xs tabular-nums">{entry.estimatedMins}</span>
               </div>
             )}
-
-            {(() => {
-              const readCount =
-                (entryHistory?.readCount ?? 0) +
-                (entryHistory?.userIds?.every((id) => id !== user?.id) ? 1 : 0)
-
-              return readCount > 0 && !hideRecentReader ? (
-                <div className="flex items-center gap-1.5">
-                  <i className="i-mgc-eye-2-cute-re text-base" />
-                  <span className="text-xs tabular-nums">{readCount.toLocaleString()}</span>
-                </div>
-              ) : null
-            })()}
           </div>
         </div>
+        {/* Recent Readers */}
+        {!noRecentReader && !hideRecentReader && <EntryReadHistory entryId={entryId} />}
       </div>
     </div>
   )
