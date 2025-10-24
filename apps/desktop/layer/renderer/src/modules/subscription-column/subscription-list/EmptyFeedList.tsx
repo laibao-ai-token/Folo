@@ -1,3 +1,4 @@
+import { FeedViewType } from "@follow/constants"
 import { stopPropagation } from "@follow/utils/dom"
 import { memo } from "react"
 import { useTranslation } from "react-i18next"
@@ -7,48 +8,54 @@ import { useModalStack } from "~/components/ui/modal/stacked/hooks"
 
 import { SimpleDiscoverModal } from "../SimpleDiscoverModal"
 
-export const EmptyFeedList = memo(({ onClick }: { onClick?: (e: React.MouseEvent) => void }) => {
-  const { t } = useTranslation()
-  const location = useLocation()
-  const isOnDiscoverPage = location.pathname === "/discover"
-  const { present } = useModalStack()
+export const EmptyFeedList = memo(
+  ({ onClick, view }: { onClick?: (e: React.MouseEvent) => void; view?: FeedViewType }) => {
+    const { t } = useTranslation()
+    const location = useLocation()
+    const isOnDiscoverPage = location.pathname === "/discover"
+    const { present } = useModalStack()
 
-  const handleClick = (e: React.MouseEvent) => {
-    stopPropagation(e)
-    onClick?.(e)
+    const handleClick = (e: React.MouseEvent) => {
+      stopPropagation(e)
+      onClick?.(e)
 
-    if (!isOnDiscoverPage) {
-      // Show simplified discover modal when already on discover page
-      present({
-        title: t("words.discover"),
-        content: ({ dismiss }) => <SimpleDiscoverModal dismiss={dismiss} />,
-        clickOutsideToDismiss: true,
-      })
+      if (!isOnDiscoverPage) {
+        // Show simplified discover modal when already on discover page
+        present({
+          title: t("words.discover"),
+          content: ({ dismiss }) => <SimpleDiscoverModal dismiss={dismiss} />,
+          clickOutsideToDismiss: true,
+        })
+      }
     }
-  }
 
-  return (
-    <div className="mt-12 flex flex-1 items-center font-normal text-zinc-500">
-      {isOnDiscoverPage ? (
-        <div
-          className="cursor-menu flex flex-1 flex-col items-center justify-center gap-2"
-          onClick={handleClick}
-        >
-          <i className="i-mgc-arrow-right-up-cute-re text-3xl" />
-          <span className="text-balance text-center text-sm">
-            {t("sidebar.already_on_discover_page")}
-          </span>
-        </div>
-      ) : (
-        <div
-          className="cursor-menu flex flex-1 flex-col items-center justify-center gap-2"
-          onClick={handleClick}
-        >
-          <i className="i-mgc-add-cute-re text-3xl" />
-          <span className="text-base">{t("sidebar.add_more_feeds")}</span>
-        </div>
-      )}
-    </div>
-  )
-})
+    const isFinance = view === FeedViewType.Audios
+
+    return (
+      <div className="mt-12 flex flex-1 items-center font-normal text-zinc-500">
+        {isOnDiscoverPage ? (
+          <div
+            className="cursor-menu flex flex-1 flex-col items-center justify-center gap-2"
+            onClick={handleClick}
+          >
+            <i className="i-mgc-arrow-right-up-cute-re text-3xl" />
+            <span className="text-balance text-center text-sm">
+              {t("sidebar.already_on_discover_page")}
+            </span>
+          </div>
+        ) : (
+          <div
+            className="cursor-menu flex flex-1 flex-col items-center justify-center gap-2"
+            onClick={handleClick}
+          >
+            <i className="i-mgc-add-cute-re text-3xl" />
+            <span className="text-base">
+              {isFinance ? t("sidebar.add_more_feeds_finance") : t("sidebar.add_more_feeds")}
+            </span>
+          </div>
+        )}
+      </div>
+    )
+  },
+)
 EmptyFeedList.displayName = "EmptyFeedList"

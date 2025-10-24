@@ -83,7 +83,8 @@ export const views: ViewDefinition[] = [
   },
   {
     name: "feed_view_type.audios",
-    icon: <i className="i-mgc-mic-cute-fi" />,
+    // Use a finance-style icon per request
+    icon: <i className="i-mgc-trending-up-cute-re" />,
     className: "text-purple-600 dark:text-purple-500",
     peerClassName: "peer-checked:text-purple-600 peer-checked:dark:text-purple-500",
     translation: "title",

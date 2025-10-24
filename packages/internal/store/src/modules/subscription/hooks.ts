@@ -270,7 +270,9 @@ export const useViewWithSubscription = (options?: { excludeAll?: boolean }) =>
           view.view === FeedViewType.Articles ||
           view.view === FeedViewType.SocialMedia ||
           view.view === FeedViewType.Pictures ||
-          view.view === FeedViewType.Videos
+          view.view === FeedViewType.Videos ||
+          // Keep a consistent primary set; show Audios even if empty
+          view.view === FeedViewType.Audios
         ) {
           return true
         } else {

@@ -42,6 +42,7 @@ import { FeedItem, ListItemAutoHideUnread } from "../FeedItem"
 import { useShouldFreeUpSpace } from "../hook"
 import { SortableFeedList, SortByAlphabeticalInbox, SortByAlphabeticalList } from "../sort-by"
 import { EmptyFeedList } from "./EmptyFeedList"
+import { FinanceQuickLinks } from "./FinanceQuickLinks"
 import { ListHeader } from "./ListHeader"
 import { StarredItem } from "./StarredItem"
 import type { SubscriptionProps } from "./SubscriptionListGuard"
@@ -288,7 +289,9 @@ const SubscriptionImpl = ({ ref, className, view, isSubscriptionLoading }: Subsc
         )}
         <DraggableContext value={draggableContextValue}>
           <div className="space-y-px" id="feeds-area" ref={setNodeRef}>
-            {hasData ? (
+            {view === FeedViewType.Audios ? (
+              <FinanceQuickLinks />
+            ) : hasData ? (
               <SortableFeedList
                 view={view}
                 data={feedsData}
@@ -297,7 +300,7 @@ const SubscriptionImpl = ({ ref, className, view, isSubscriptionLoading }: Subsc
             ) : isSubscriptionLoading ? (
               <SubscriptionListSkeleton />
             ) : (
-              <EmptyFeedList />
+              <EmptyFeedList view={view} />
             )}
           </div>
         </DraggableContext>
