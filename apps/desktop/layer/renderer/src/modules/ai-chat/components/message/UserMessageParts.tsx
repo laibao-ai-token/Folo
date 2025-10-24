@@ -15,6 +15,10 @@ export const UserMessageParts: React.FC<UserMessagePartsProps> = React.memo(({ m
 
     switch (part.type) {
       case "text": {
+        // Hide inline Current-entry context from the visible user bubble.
+        if (typeof part.text === "string" && part.text.startsWith("Context: Current entry")) {
+          return null
+        }
         return <AIMarkdownStreamingMessage isStreaming={false} key={partKey} text={part.text} />
       }
 

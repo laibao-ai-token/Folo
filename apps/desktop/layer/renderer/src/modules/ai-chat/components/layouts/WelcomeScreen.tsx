@@ -326,7 +326,6 @@ const FinanceAnalysisTrigger = ({
             try {
               const k = await fetchKlineByCode(code, { klt: 101, lmt: 260, fqt: 1 })
               if (k?.rows?.length) {
-                const linesExtra: string[] = []
                 for (const r of k.rows.slice(-260)) {
                   high52 = Math.max(high52 ?? -Infinity, r.high)
                   low52 = Math.min(low52 ?? Infinity, r.low)
@@ -363,57 +362,49 @@ const FinanceAnalysisTrigger = ({
                 }
                 if (avgVol10) linesExtra.push(`AvgVol10: ${avgVol10}`)
                 if (avgVol20) linesExtra.push(`AvgVol20: ${avgVol20}`)
-
-                // Attach after metrics are known
-                setContext((prev) => {
-                  // If context already set by a faster branch, keep it
-                  if (prev) return prev
-                  const lines = [
-                    `Context: A-shares quote`,
-                    `Code: ${q.code}`,
-                    `Name: ${q.name}`,
-                    `Price: ${q.price.toFixed(2)}`,
-                    `Change: ${q.change.toFixed(2)} (${q.changePct.toFixed(2)}%)`,
-                    `Open: ${q.open.toFixed(2)}  High: ${q.high.toFixed(2)}  Low: ${q.low.toFixed(2)}  PrevClose: ${q.prevClose.toFixed(2)}`,
-                    `Volume(shares): ${q.volumeShares}`,
-                    `Turnover(CNY): ${q.turnoverYuan.toFixed(0)}`,
-                    `Amplitude(%): ${q.amplitudePct.toFixed(2)}`,
-                    Number.isFinite(q.turnoverRatePct)
-                      ? `TurnoverRate(%): ${q.turnoverRatePct.toFixed(2)}`
-                      : undefined,
-                    q.timestampMs ? `Time: ${new Date(q.timestampMs).toLocaleString()}` : undefined,
-                    typeof q.limitUp === "number" ? `LimitUp: ${q.limitUp.toFixed(2)}` : undefined,
-                    typeof q.limitDown === "number"
-                      ? `LimitDown: ${q.limitDown.toFixed(2)}`
-                      : undefined,
-                    q.sessionStatus ? `Session: ${q.sessionStatus}` : undefined,
-                    high52 && low52 && high52 > low52
-                      ? `High52: ${high52.toFixed(2)}  Low52: ${low52.toFixed(2)}  Pctl52(%): ${(
-                          Math.max(
-                            0,
-                            Math.min(
-                              1,
-                              (q.price - (low52 as number)) /
-                                ((high52 as number) - (low52 as number)),
-                            ),
-                          ) * 100
-                        ).toFixed(2)}`
-                      : undefined,
-                    ma20
-                      ? `MA20: ${ma20.toFixed(2)}  Dev20(%): ${(((q.price - ma20) / ma20) * 100).toFixed(2)}`
-                      : undefined,
-                    ma60
-                      ? `MA60: ${ma60.toFixed(2)}  Dev60(%): ${(((q.price - ma60) / ma60) * 100).toFixed(2)}`
-                      : undefined,
-                    ...linesExtra,
-                  ]
-                  return lines.filter(Boolean).join("\n")
-                })
               }
             } catch {
-              // noop: finance enrichment is best-effort
+              // ignore enrichment errors
             }
             if (cancelled) return
+            const linesExtra: string[] = []
+            const lines = [
+              `Context: A-shares quote`,
+              `Code: ${q.code}`,
+              `Name: ${q.name}`,
+              `Price: ${q.price.toFixed(2)}`,
+              `Change: ${q.change.toFixed(2)} (${q.changePct.toFixed(2)}%)`,
+              `Open: ${q.open.toFixed(2)}  High: ${q.high.toFixed(2)}  Low: ${q.low.toFixed(2)}  PrevClose: ${q.prevClose.toFixed(2)}`,
+              `Volume(shares): ${q.volumeShares}`,
+              `Turnover(CNY): ${q.turnoverYuan.toFixed(0)}`,
+              `Amplitude(%): ${q.amplitudePct.toFixed(2)}`,
+              Number.isFinite(q.turnoverRatePct)
+                ? `TurnoverRate(%): ${q.turnoverRatePct.toFixed(2)}`
+                : undefined,
+              q.timestampMs ? `Time: ${new Date(q.timestampMs).toLocaleString()}` : undefined,
+              typeof q.limitUp === "number" ? `LimitUp: ${q.limitUp.toFixed(2)}` : undefined,
+              typeof q.limitDown === "number" ? `LimitDown: ${q.limitDown.toFixed(2)}` : undefined,
+              q.sessionStatus ? `Session: ${q.sessionStatus}` : undefined,
+              high52 && low52 && high52 > low52
+                ? `High52: ${high52.toFixed(2)}  Low52: ${low52.toFixed(2)}  Pctl52(%): ${(
+                    Math.max(
+                      0,
+                      Math.min(
+                        1,
+                        (q.price - (low52 as number)) / ((high52 as number) - (low52 as number)),
+                      ),
+                    ) * 100
+                  ).toFixed(2)}`
+                : undefined,
+              ma20
+                ? `MA20: ${ma20.toFixed(2)}  Dev20(%): ${(((q.price - ma20) / ma20) * 100).toFixed(2)}`
+                : undefined,
+              ma60
+                ? `MA60: ${ma60.toFixed(2)}  Dev60(%): ${(((q.price - ma60) / ma60) * 100).toFixed(2)}`
+                : undefined,
+              ...linesExtra,
+            ]
+            setContext(lines.join("\n"))
 
             break
           }

@@ -1,9 +1,12 @@
 import { getReadonlyRoute } from "@follow/components/atoms/route.js"
 import { useGlobalFocusableHasScope } from "@follow/components/common/Focusable/hooks.js"
+// New: resizable AI panel in subviews
+import { PanelSplitter } from "@follow/components/ui/divider/index.js"
 import { RootPortal } from "@follow/components/ui/portal/index.js"
 import { ScrollArea } from "@follow/components/ui/scroll-area/index.js"
 import { Routes } from "@follow/constants"
 import { ELECTRON_BUILD } from "@follow/shared/constants"
+import { defaultUISettings } from "@follow/shared/settings/defaults"
 import { springScrollTo } from "@follow/utils/scroller"
 import { clsx, cn, getOS } from "@follow/utils/utils"
 import { m } from "framer-motion"
@@ -11,13 +14,19 @@ import { LinearBlur } from "progressive-blur"
 import { isValidElement, useCallback, useEffect, useRef, useState } from "react"
 import { useHotkeys } from "react-hotkeys-hook"
 import { useTranslation } from "react-i18next"
+import { useResizable } from "react-resizable-layout"
 import { NavigationType, Outlet, useLocation, useNavigate, useNavigationType } from "react-router"
 import { parseQuery } from "ufo"
 
+import { AIChatPanelStyle, useAIChatPanelStyle, useAIPanelVisibility } from "~/atoms/settings/ai"
+import { getUISettings, setUISetting } from "~/atoms/settings/ui"
 import { Focusable } from "~/components/common/Focusable"
 import { GlassButton } from "~/components/ui/button/GlassButton"
 import { HeaderActionButton, HeaderActionGroup } from "~/components/ui/button/HeaderActionButton"
 import { HotkeyScope } from "~/constants"
+import { AIChatRoot } from "~/modules/ai-chat/components/layouts/AIChatRoot"
+import { AIChatLayout } from "~/modules/app-layout/ai/AIChatLayout"
+import { AIIndicator } from "~/modules/app-layout/ai/AISplineButton"
 
 import { useSubViewRightView, useSubViewTitleValue } from "./hooks"
 
@@ -52,9 +61,13 @@ import { useSubViewRightView, useSubViewTitleValue } from "./hooks"
  */
 export function SubviewLayout() {
   return (
-    <Focusable className="contents" scope={HotkeyScope.SubLayer}>
-      <SubviewLayoutInner />
-    </Focusable>
+    <AIChatRoot wrapFocusable={false}>
+      <Focusable className="contents" scope={HotkeyScope.SubLayer}>
+        <SubviewLayoutInner />
+      </Focusable>
+      {/* Global AI indicator for subviews (open panel) */}
+      <AIIndicator />
+    </AIChatRoot>
   )
 }
 
@@ -156,6 +169,33 @@ function SubviewLayoutInner() {
     enabled: useGlobalFocusableHasScope(HotkeyScope.SubLayer),
   })
 
+  // Right AI panel state (fixed mode). Hooks are called unconditionally to keep order stable.
+  const aiPanelStyle = useAIChatPanelStyle()
+  const aiVisible = useAIPanelVisibility()
+  const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, Math.round(v)))
+  const minWidth = 300
+  const maxWidth = 1200
+  const halfScreen = typeof window !== "undefined" ? Math.floor(window.innerWidth * 0.4) : 800
+  const preferred = getUISettings().aiColWidth ?? defaultUISettings.aiColWidth
+  const initial = clamp(preferred || halfScreen, minWidth, maxWidth)
+  const { position, separatorProps, isDragging, separatorCursor, setPosition } = useResizable({
+    axis: "x",
+    min: minWidth,
+    max: maxWidth,
+    initial,
+    reverse: true,
+    onResizeEnd({ position }) {
+      setUISetting("aiColWidth", position)
+      window.dispatchEvent(new Event("resize"))
+    },
+  })
+  const resetRightWidth = () => {
+    const resetWidth = clamp(defaultUISettings.aiColWidth, minWidth, maxWidth)
+    setUISetting("aiColWidth", resetWidth)
+    setPosition(resetWidth)
+    window.dispatchEvent(new Event("resize"))
+  }
+
   return (
     <div className="relative flex size-full">
       {/* Enhanced Header with smooth transitions */}
@@ -201,24 +241,59 @@ function SubviewLayoutInner() {
         </m.div>
       </div>
 
-      {/* Content Area */}
-      <ScrollArea.ScrollArea
-        mask={false}
-        flex
-        ref={setRef}
-        rootClassName="w-full"
-        viewportClassName="pb-12 pt-24 [&>div]:items-center"
-        onUpdateMaxScroll={updateMaxScroll}
-      >
-        <Outlet />
-      </ScrollArea.ScrollArea>
+      {/* Content Area + (optional) right-docked AI panel in a real split layout */}
+      <div className="relative flex w-full min-w-0 grow">
+        {/* Left: scrollable content */}
+        <div className="min-w-0 flex-1">
+          <ScrollArea.ScrollArea
+            mask={false}
+            flex
+            ref={setRef}
+            rootClassName="w-full"
+            viewportClassName="pb-12 pt-24 [&>div]:items-center"
+            onUpdateMaxScroll={updateMaxScroll}
+          >
+            <Outlet />
+          </ScrollArea.ScrollArea>
+        </div>
+
+        {/* Right: resizable AI panel (Fixed style only) */}
+        {aiPanelStyle === AIChatPanelStyle.Fixed && aiVisible && (
+          <>
+            <PanelSplitter
+              {...separatorProps}
+              cursor={separatorCursor}
+              isDragging={isDragging}
+              onDoubleClick={resetRightWidth}
+            />
+            <div
+              className="pointer-events-auto h-full shrink-0 border-l"
+              style={{ width: position, borderColor: "var(--border)" }}
+            >
+              <AIChatLayout
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  ["--ai-chat-layout-width" as any]: `${position}px`,
+                }}
+              />
+            </div>
+          </>
+        )}
+      </div>
 
       <RootPortal>
         <ScrollProgressFAB scrollY={scrollY} scrollRef={scrollRef} maxScroll={maxScroll} />
       </RootPortal>
+
+      {/* AI Chat: floating panel (if selected in settings) */}
+      {aiPanelStyle === AIChatPanelStyle.Floating && <AIChatLayout key="subview-ai-floating" />}
     </div>
   )
 }
+
+// Note: previous lightweight Subview AI panel helper was removed to avoid
+// conditional hook patterns and unused symbol warnings.
 
 const SubViewHeaderRightView = ({ isHeaderElevated }: { isHeaderElevated: boolean }) => {
   const rightView = useSubViewRightView()

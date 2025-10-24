@@ -22,5 +22,5 @@ export interface ChatSlice {
   chatActions: ChatSliceActions
 
   // Scene
-  scene: "general" | "onboarding" | "timeline-summary"
+  scene: "general" | "onboarding" | "timeline-summary" | "finance-analysis"
 }
