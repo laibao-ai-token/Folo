@@ -1,6 +1,7 @@
 import { useFocusable } from "@follow/components/common/Focusable/hooks.js"
 import { ScrollArea } from "@follow/components/ui/scroll-area/ScrollArea.js"
 import { useElementWidth } from "@follow/hooks"
+import { useEntry } from "@follow/store/entry/hooks"
 import { getCategoryFeedIds } from "@follow/store/subscription/getter"
 import { usePrefetchSummary } from "@follow/store/summary/hooks"
 import { tracker } from "@follow/tracker"
@@ -82,6 +83,11 @@ const ChatInterfaceContent = ({ centerInputOnEmpty }: ChatInterfaceProps) => {
 
   const currentChatId = useCurrentChatId()
   const mainEntryId = useMainEntryId()
+  const entryMeta = useEntry(mainEntryId, (state) => ({
+    title: state.title,
+    url: state.url,
+    content: state.readabilityContent || state.content || "",
+  }))
   const actionLanguage = useActionLanguage()
 
   usePrefetchSummary({
@@ -211,12 +217,34 @@ const ChatInterfaceContent = ({ centerInputOnEmpty }: ChatInterfaceProps) => {
       }
     }
 
-    const parts: BizUIMessage["parts"] = [
-      {
-        type: "data-block",
-        data: blocks,
-      },
-    ]
+    const parts: BizUIMessage["parts"] = []
+
+    // If we have a current entry and its HTML content locally, build inline context text
+    // so the proxy can skip upstream fetching entirely.
+    if (mainEntryId && entryMeta?.content) {
+      const htmlToText = (html: string) =>
+        (html || "")
+          .replaceAll(/<script[\s\S]*?<\/script>/gi, " ")
+          .replaceAll(/<style[\s\S]*?<\/style>/gi, " ")
+          .replaceAll(/<[^>]+>/g, " ")
+          .replaceAll(/\s+/g, " ")
+          .trim()
+
+      const plainText = htmlToText(entryMeta.content)
+      const metaLines = [
+        "Context: Current entry",
+        entryMeta.title ? `Title: ${entryMeta.title}` : undefined,
+        entryMeta.url ? `URL: ${entryMeta.url}` : undefined,
+      ].filter(Boolean)
+      const contextText = [metaLines.join("\n"), "", plainText].join("\n").slice(0, 12000)
+
+      parts.push({ type: "text", text: contextText })
+    }
+
+    parts.push({
+      type: "data-block",
+      data: blocks,
+    })
 
     if (typeof message === "string") {
       parts.push({
