@@ -18,6 +18,7 @@ export function htmlInjectPlugin(env: typeof EnvType): PluginOption {
       }.toString()}
       injectEnv(${JSON.stringify({
         VITE_API_URL: env.VITE_API_URL,
+        VITE_AI_API_URL: env.VITE_AI_API_URL,
         VITE_WEB_URL: env.VITE_WEB_URL,
       })})
       </script>`,

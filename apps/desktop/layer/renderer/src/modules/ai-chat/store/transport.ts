@@ -10,7 +10,7 @@ import { getAIModelState } from "../atoms/session"
 export function createChatTransport() {
   return new DefaultChatTransport({
     // Custom fetch configuration
-    api: `${env.VITE_API_URL}/ai/chat`,
+    api: `${env.VITE_AI_API_URL || env.VITE_API_URL}/ai/chat`,
     credentials: "include",
     // Add selected model to request body
     body: () => {

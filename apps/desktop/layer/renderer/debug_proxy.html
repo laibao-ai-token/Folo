@@ -8,6 +8,8 @@
 
       const searchParams = new URLSearchParams(window.location.search)
       const debugHost = searchParams.get("debug-host")
+      const apiHost = searchParams.get("api-host")
+      const aiHost = searchParams.get("ai-host")
 
       const resetSessionStorage = () => {
         sessionStorage.removeItem("debug-host")
@@ -83,7 +85,7 @@
           })
         })
 
-      const injectScript = (apiUrl) => {
+      const injectScript = (apiUrl, aiApiUrl) => {
         const upstreamOrigin = window.location.origin
         const template = `function injectEnv(env2) {
       for (const key in env2) {
@@ -92,13 +94,14 @@
       globalThis["__followEnv"][key] = env2[key];
       }
       }
-      injectEnv({"VITE_API_URL":"${apiUrl}","VITE_EXTERNAL_API_URL":"${apiUrl}","VITE_WEB_URL":"${upstreamOrigin}"})`
+      injectEnv({"VITE_API_URL":"${apiUrl}","VITE_AI_API_URL":"${aiApiUrl || ""}","VITE_EXTERNAL_API_URL":"${apiUrl}","VITE_WEB_URL":"${upstreamOrigin}"})`
         const $script = document.createElement("script")
         $script.innerHTML = template
         document.head.prepend($script)
       }
 
-      injectScript(import.meta.env.VITE_API_URL)
+      // Prefer query param overrides when present
+      injectScript(apiHost || import.meta.env.VITE_API_URL, aiHost || "")
     </script>
   </head>
   <body></body>
