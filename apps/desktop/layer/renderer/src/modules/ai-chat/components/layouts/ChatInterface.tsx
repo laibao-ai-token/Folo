@@ -6,6 +6,7 @@ import { getCategoryFeedIds } from "@follow/store/subscription/getter"
 import { usePrefetchSummary } from "@follow/store/summary/hooks"
 import { tracker } from "@follow/tracker"
 import { clsx, cn, detectIsEditableElement, nextFrame } from "@follow/utils"
+import { getImageProxyUrl } from "@follow/utils/img-proxy"
 import { ErrorBoundary } from "@sentry/react"
 import type { EditorState } from "lexical"
 import { createEditor } from "lexical"
@@ -87,6 +88,7 @@ const ChatInterfaceContent = ({ centerInputOnEmpty }: ChatInterfaceProps) => {
     title: state.title,
     url: state.url,
     content: state.readabilityContent || state.content || "",
+    media: state.media,
   }))
   const actionLanguage = useActionLanguage()
 
@@ -239,6 +241,35 @@ const ChatInterfaceContent = ({ centerInputOnEmpty }: ChatInterfaceProps) => {
       const contextText = [metaLines.join("\n"), "", plainText].join("\n").slice(0, 12000)
 
       parts.push({ type: "text", text: contextText })
+    }
+
+    // Attach entry images as file parts so the proxy can trigger the vision stage
+    try {
+      const photos = Array.isArray(entryMeta?.media)
+        ? (entryMeta?.media || []).filter((m) => m && m.type === "photo")
+        : []
+      if (photos.length > 0) {
+        const MAX_FILES = 4
+        const guessMime = (u: string) => {
+          const s = (u || "").toLowerCase()
+          if (s.includes("format=png") || s.endsWith(".png")) return "image/png"
+          if (s.includes("format=jpeg") || s.endsWith(".jpeg") || s.endsWith(".jpg"))
+            return "image/jpeg"
+          if (s.includes("format=webp") || s.endsWith(".webp")) return "image/webp"
+          if (s.endsWith(".gif")) return "image/gif"
+          return "image/jpeg"
+        }
+        for (const m of photos.slice(0, MAX_FILES)) {
+          const proxied = getImageProxyUrl({ url: m.url, width: 0, height: 0 })
+          parts.push({
+            type: "file",
+            mediaType: guessMime(m.url),
+            url: proxied,
+          } as any)
+        }
+      }
+    } catch (e) {
+      console.warn("[ai-chat] attach entry images failed", e)
     }
 
     parts.push({
