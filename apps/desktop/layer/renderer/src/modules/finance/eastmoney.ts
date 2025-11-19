@@ -1,5 +1,7 @@
 // Eastmoney quote utilities for browser
 
+import { fetchFromFinanceProxy } from "./proxy"
+
 const FIELDS = [
   "f57", // code
   "f58", // name
@@ -140,7 +142,14 @@ function getCnSessionStatus(now: Date): "open" | "closed" {
 }
 
 export async function fetchQuoteByCode(code: string): Promise<Quote> {
-  const secid = toSecId(code)
+  const normalized = code.trim()
+  try {
+    const proxied = await fetchFromFinanceProxy<Quote>("/finance/cn-quote", { code: normalized })
+    if (proxied) return proxied
+  } catch (error) {
+    console.warn("[finance] proxy cn quote failed", error)
+  }
+  const secid = toSecId(normalized)
   const url = `https://push2.eastmoney.com/api/qt/stock/get?secid=${encodeURIComponent(
     secid,
   )}&fields=${encodeURIComponent(FIELDS)}`

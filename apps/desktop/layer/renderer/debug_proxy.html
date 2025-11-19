@@ -94,7 +94,7 @@
       globalThis["__followEnv"][key] = env2[key];
       }
       }
-      injectEnv({"VITE_API_URL":"${apiUrl}","VITE_AI_API_URL":"${aiApiUrl || ""}","VITE_EXTERNAL_API_URL":"${apiUrl}","VITE_WEB_URL":"${upstreamOrigin}"})`
+      injectEnv({"VITE_API_URL":"${apiUrl}","VITE_AI_API_URL":"${aiApiUrl || ""}","VITE_FINANCE_PROXY_URL":"${aiApiUrl || apiUrl}","VITE_EXTERNAL_API_URL":"${apiUrl}","VITE_WEB_URL":"${upstreamOrigin}"})`
         const $script = document.createElement("script")
         $script.innerHTML = template
         document.head.prepend($script)

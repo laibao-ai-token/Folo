@@ -1,5 +1,7 @@
 // US stocks via Eastmoney (quote) + Yahoo (kline)
 
+import { fetchFromFinanceProxy } from "./proxy"
+
 export { ensureEcharts } from "./eastmoney"
 
 const normFloat = (x: unknown) => {
@@ -27,6 +29,12 @@ export type UsQuote = {
 // f170 is percentage value; divide by 100 to get %.
 export async function fetchUsQuoteBySymbol(symbolInput: string): Promise<UsQuote> {
   const symbol = symbolInput.trim().toUpperCase()
+  try {
+    const proxied = await fetchFromFinanceProxy<UsQuote>("/finance/us-quote", { symbol })
+    if (proxied) return proxied
+  } catch (error) {
+    console.warn("[finance] proxy us quote failed", error)
+  }
   const url = `https://push2.eastmoney.com/api/qt/stock/get?secid=${encodeURIComponent(
     `105.${symbol}`,
   )}&fields=${encodeURIComponent("f57,f58,f43,f60,f46,f44,f45,f169,f170,f47,f86")}`
@@ -87,6 +95,19 @@ export async function fetchUsKlineViaYahoo(
   { range = "5y", interval = "1d" }: UsKlineOptions = {},
 ): Promise<UsKlineResult> {
   const symbol = symbolInput.trim().toUpperCase()
+  // Try proxy first when configured
+  try {
+    const { buildFinanceProxyUrl } = await import("./proxy")
+    const url = buildFinanceProxyUrl("/finance/us-kline", { symbol, range, interval })
+    if (url) {
+      const r = await fetch(url, { cache: "no-store", credentials: "include" })
+      if (!r.ok) throw new Error(`Proxy HTTP ${r.status}`)
+      const data = (await r.json()) as UsKlineResult
+      if (Array.isArray(data.rows) && data.rows.length > 0) return data
+    }
+  } catch (err) {
+    console.warn("[finance] proxy us kline failed", err)
+  }
   const base = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`
   // Helper to read JSON from either Yahoo or mirror (as text first)
   async function load(url: string): Promise<any> {

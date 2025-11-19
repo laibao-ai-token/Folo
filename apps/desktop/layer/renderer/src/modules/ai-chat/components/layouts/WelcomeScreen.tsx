@@ -15,7 +15,7 @@ import { useGeneralSettingKey } from "~/atoms/settings/general"
 import { AISpline } from "~/modules/ai-chat/components/3d-models/AISpline"
 import { useAsharesList, useLastAshares } from "~/modules/finance/atoms"
 import { fetchKlineByCode, fetchQuoteByCode } from "~/modules/finance/eastmoney"
-import { fetchUsQuoteBySymbol } from "~/modules/finance/us"
+import { fetchUsKlineViaYahoo, fetchUsQuoteBySymbol } from "~/modules/finance/us"
 
 import { useAttachScrollBeyond } from "../../hooks/useAttachScrollBeyond"
 import { useMainEntryId } from "../../hooks/useMainEntryId"
@@ -323,6 +323,8 @@ const FinanceAnalysisTrigger = ({
             let low52: number | undefined
             let ma20: number | undefined
             let ma60: number | undefined
+            // Collect extra technical/context lines here so we can enrich the prompt.
+            const linesExtra: string[] = []
             try {
               const k = await fetchKlineByCode(code, { klt: 101, lmt: 260, fqt: 1 })
               if (k?.rows?.length) {
@@ -362,12 +364,90 @@ const FinanceAnalysisTrigger = ({
                 }
                 if (avgVol10) linesExtra.push(`AvgVol10: ${avgVol10}`)
                 if (avgVol20) linesExtra.push(`AvgVol20: ${avgVol20}`)
+
+                // 最近 7 个交易日（按日）
+                const recent7 = rows.slice(-7)
+                if (recent7.length > 0) {
+                  const lines7 = recent7.map(
+                    (r) =>
+                      `${r.time} O:${r.open.toFixed(2)} H:${r.high.toFixed(2)} L:${r.low.toFixed(2)} C:${r.close.toFixed(2)} Vol:${(r.volumeShares / 1e4).toFixed(0)}万`,
+                  )
+                  linesExtra.push(`Recent7D:\n- ${lines7.join("\n- ")}`)
+                }
+
+                // 20日区间、百分位、支撑/压力（近端）
+                if (rows.length >= 20) {
+                  let hi20 = -Infinity
+                  let lo20 = Infinity
+                  for (let i = rows.length - 20; i < rows.length; i++) {
+                    const r = rows[i]!
+                    if (r.high > hi20) hi20 = r.high
+                    if (r.low < lo20) lo20 = r.low
+                  }
+                  if (Number.isFinite(hi20) && Number.isFinite(lo20) && hi20 > lo20) {
+                    const pctl20 = Math.max(0, Math.min(1, (q.price - lo20) / (hi20 - lo20))) * 100
+                    linesExtra.push(
+                      `High20: ${hi20.toFixed(2)}  Low20: ${lo20.toFixed(2)}  Pctl20(%): ${pctl20.toFixed(2)}`,
+                      `Support(near): ${lo20.toFixed(2)}  Resistance(near): ${hi20.toFixed(2)}`,
+                    )
+                  }
+                }
+
+                // ATR14（用 TR 的 14 日简单均值）及相对波动率
+                if (rows.length >= 15) {
+                  let sumTR = 0
+                  for (let i = rows.length - 14; i < rows.length; i++) {
+                    const cur = rows[i]!
+                    const prevClose = rows[i - 1]!.close
+                    const tr = Math.max(
+                      cur.high - cur.low,
+                      Math.abs(cur.high - prevClose),
+                      Math.abs(cur.low - prevClose),
+                    )
+                    sumTR += tr
+                  }
+                  const atr14 = sumTR / 14
+                  if (Number.isFinite(atr14)) {
+                    const atrPct = (atr14 / q.price) * 100
+                    linesExtra.push(
+                      `ATR14: ${atr14.toFixed(2)}  ATR14%(price): ${atrPct.toFixed(2)}`,
+                      `ATR Bands(±1x): ${(q.price - atr14).toFixed(2)} ~ ${(q.price + atr14).toFixed(2)}`,
+                    )
+                  }
+                }
+
+                // 区间收益率：5D/20D/60D
+                const n = rows.length
+                const pct = (a: number, b: number) => ((a - b) / b) * 100
+                const addRet = (label: string, lookback: number) => {
+                  if (n > lookback) {
+                    const base = rows[n - 1 - lookback]!.close
+                    const ret = pct(rows[n - 1]!.close, base)
+                    if (Number.isFinite(ret)) linesExtra.push(`${label}: ${ret.toFixed(2)}%`)
+                  }
+                }
+                addRet("Ret5D", 5)
+                addRet("Ret20D", 20)
+                addRet("Ret60D", 60)
+
+                // 趋势标记：是否站上均线/均线多头
+                if (typeof ma20 === "number" || typeof ma60 === "number") {
+                  const above20 = typeof ma20 === "number" ? q.price >= ma20 : undefined
+                  const above60 = typeof ma60 === "number" ? q.price >= ma60 : undefined
+                  const bull =
+                    typeof ma20 === "number" && typeof ma60 === "number" ? ma20 > ma60 : undefined
+                  const flags = [
+                    above20 != null ? `AboveMA20: ${above20 ? "Y" : "N"}` : undefined,
+                    above60 != null ? `AboveMA60: ${above60 ? "Y" : "N"}` : undefined,
+                    bull != null ? `MA20>MA60: ${bull ? "Y" : "N"}` : undefined,
+                  ].filter(Boolean)
+                  if (flags.length > 0) linesExtra.push(`TrendFlags: ${flags.join("  ")}`)
+                }
               }
             } catch {
               // ignore enrichment errors
             }
             if (cancelled) return
-            const linesExtra: string[] = []
             const lines = [
               `Context: A-shares quote`,
               `Code: ${q.code}`,
@@ -378,6 +458,9 @@ const FinanceAnalysisTrigger = ({
               `Volume(shares): ${q.volumeShares}`,
               `Turnover(CNY): ${q.turnoverYuan.toFixed(0)}`,
               `Amplitude(%): ${q.amplitudePct.toFixed(2)}`,
+              Number.isFinite(q.prevClose) && Number.isFinite(q.open)
+                ? `Gap(%): ${(((q.open - q.prevClose) / q.prevClose) * 100).toFixed(2)}`
+                : undefined,
               Number.isFinite(q.turnoverRatePct)
                 ? `TurnoverRate(%): ${q.turnoverRatePct.toFixed(2)}`
                 : undefined,
@@ -420,6 +503,20 @@ const FinanceAnalysisTrigger = ({
               `Open: ${q.open.toFixed(2)}  High: ${q.high.toFixed(2)}  Low: ${q.low.toFixed(2)}  PrevClose: ${q.prevClose.toFixed(2)}`,
               q.volumeShares ? `Volume(shares): ${q.volumeShares}` : undefined,
             ].filter(Boolean) as string[]
+            // 最近 7 个交易日（US，日线）
+            try {
+              const k = await fetchUsKlineViaYahoo(code, { range: "1mo", interval: "1d" })
+              const recent7 = (k?.rows || []).slice(-7)
+              if (recent7.length > 0) {
+                const lines7 = recent7.map(
+                  (r) =>
+                    `${r.time} O:${r.open.toFixed(2)} H:${r.high.toFixed(2)} L:${r.low.toFixed(2)} C:${r.close.toFixed(2)} Vol:${(r.volumeShares / 1e6).toFixed(2)}M`,
+                )
+                lines.push(`Recent7D:\n- ${lines7.join("\n- ")}`)
+              }
+            } catch {
+              // ignore kline errors
+            }
             setContext(lines.join("\n"))
 
             break
@@ -454,6 +551,19 @@ const FinanceAnalysisTrigger = ({
                 `Open: ${q.open.toFixed(2)}  High: ${q.high.toFixed(2)}  Low: ${q.low.toFixed(2)}  PrevClose: ${q.prevClose.toFixed(2)}`,
                 q.volumeShares ? `Volume(shares): ${q.volumeShares}` : undefined,
               ].filter(Boolean) as string[]
+              try {
+                const k = await fetchUsKlineViaYahoo(usSymbol, { range: "1mo", interval: "1d" })
+                const recent7 = (k?.rows || []).slice(-7)
+                if (recent7.length > 0) {
+                  const lines7 = recent7.map(
+                    (r) =>
+                      `${r.time} O:${r.open.toFixed(2)} H:${r.high.toFixed(2)} L:${r.low.toFixed(2)} C:${r.close.toFixed(2)} Vol:${(r.volumeShares / 1e6).toFixed(2)}M`,
+                  )
+                  lines.push(`Recent7D:\n- ${lines7.join("\n- ")}`)
+                }
+              } catch {
+                // ignore
+              }
               setContext(lines.join("\n"))
             } else if (cnCode) {
               const q = await fetchQuoteByCode(cnCode)
