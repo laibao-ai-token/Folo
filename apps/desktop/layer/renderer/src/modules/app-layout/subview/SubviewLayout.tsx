@@ -249,7 +249,7 @@ function SubviewLayoutInner() {
             mask={false}
             flex
             ref={setRef}
-            rootClassName="w-full"
+            rootClassName="h-full w-full"
             viewportClassName="pb-12 pt-24 [&>div]:items-center"
             onUpdateMaxScroll={updateMaxScroll}
           >
