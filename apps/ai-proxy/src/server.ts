@@ -2,22 +2,62 @@ import fs from "node:fs"
 
 import { createOpenAI } from "@ai-sdk/openai"
 import { serve } from "@hono/node-server"
-import { convertToCoreMessages, streamText } from "ai"
+import { convertToCoreMessages, generateText, streamText } from "ai"
 import { config as dotenvConfig } from "dotenv"
 import type { Context } from "hono"
 import { Hono } from "hono"
 import { cors } from "hono/cors"
+import { dirname } from "pathe"
 
+import {
+  fetchEastmoneyCnQuote,
+  fetchEastmoneyUsQuote,
+  fetchUsKlineViaYahooServer,
+} from "./finance/eastmoney"
 // Load env from .env.local first, then .env
 if (fs.existsSync(".env.local")) {
   dotenvConfig({ path: ".env.local", override: true })
 }
 dotenvConfig()
 
-const IFLOW_BASE_URL = "https://apis.iflow.cn/v1"
+const IFLOW_BASE_URL =
+  process.env.IFLOW_API_BASE_URL ||
+  process.env.IFLOW_API_URL ||
+  "https://codex-api-slb.packycode.com/v1"
 // Upstream Follow API for resolving context ("Current" entry content)
 const UPSTREAM_API_URL =
   process.env.UPSTREAM_API_URL || process.env.FOLLOW_API_URL || "https://api.follow.is"
+
+const isReasoningModelId = (modelId: string): boolean =>
+  (modelId.startsWith("o") || modelId.startsWith("gpt-5")) && !modelId.startsWith("gpt-5-chat")
+
+const toNumber = (value: unknown): number | undefined => {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return undefined
+}
+
+const parseBoolean = (value: unknown): boolean | undefined => {
+  if (typeof value === "boolean") return value
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase()
+    if (["1", "true", "yes", "y", "on"].includes(normalized)) return true
+    if (["0", "false", "no", "n", "off"].includes(normalized)) return false
+  }
+  return undefined
+}
+
+const parseReasoningEffort = (value: unknown): "low" | "medium" | "high" | undefined => {
+  if (typeof value !== "string") return undefined
+  const normalized = value.trim().toLowerCase()
+  if (normalized === "low" || normalized === "medium" || normalized === "high") {
+    return normalized
+  }
+  return undefined
+}
 
 const app = new Hono()
 
@@ -98,6 +138,47 @@ app.get("/proxy/entries/readability", async (c) => {
   }
 })
 
+// Finance helper: proxy US quotes via Eastmoney to bypass browser/network blocking
+app.get("/finance/us-quote", async (c) => {
+  const symbol = (c.req.query("symbol") || "").trim()
+  if (!symbol) return c.json({ error: "symbol is required" }, 400)
+  try {
+    const data = await fetchEastmoneyUsQuote(symbol)
+    return c.json(data)
+  } catch (e: any) {
+    console.warn("[ai-proxy] /finance/us-quote error", e?.message || e)
+    return c.json({ error: "us quote fetch failed" }, 502)
+  }
+})
+
+// Finance helper: proxy CN quotes via Eastmoney
+app.get("/finance/cn-quote", async (c) => {
+  const code = (c.req.query("code") || "").trim()
+  if (!code) return c.json({ error: "code is required" }, 400)
+  try {
+    const data = await fetchEastmoneyCnQuote(code)
+    return c.json(data)
+  } catch (e: any) {
+    console.warn("[ai-proxy] /finance/cn-quote error", e?.message || e)
+    return c.json({ error: "cn quote fetch failed" }, 502)
+  }
+})
+
+// Finance helper: US kline via Yahoo with fallback
+app.get("/finance/us-kline", async (c) => {
+  const symbol = (c.req.query("symbol") || "").trim()
+  const range = (c.req.query("range") || "5y").trim()
+  const interval = (c.req.query("interval") || "1d").trim() as "1m" | "5m" | "1d" | "1wk" | "1mo"
+  if (!symbol) return c.json({ error: "symbol is required" }, 400)
+  try {
+    const data = await fetchUsKlineViaYahooServer(symbol, { range, interval })
+    return c.json(data)
+  } catch (e: any) {
+    console.warn("[ai-proxy] /finance/us-kline error", e?.message || e)
+    return c.json({ error: "us kline fetch failed" }, 502)
+  }
+})
+
 // Core chat endpoint used by the desktop app
 app.post("/ai/chat", async (c) => {
   const apiKey = process.env.IFLOW_API_KEY
@@ -121,7 +202,7 @@ app.post("/ai/chat", async (c) => {
   }
 
   // Accept both 'provider/model' and plain model id; allow override via DEFAULT_MODEL
-  const DEFAULT_MODEL = process.env.DEFAULT_MODEL || "gpt-4o-mini"
+  const DEFAULT_MODEL = process.env.DEFAULT_MODEL || "qwen3-max"
   // Normalize incoming model string: support `provider/model`, plain id, or "auto" (fallback to default)
   const sanitizeModel = (raw: unknown): string => {
     if (typeof raw !== "string") return DEFAULT_MODEL
@@ -238,6 +319,7 @@ app.post("/ai/chat", async (c) => {
   // - Keep "file" as-is when possible
   // - Extract "data-block" (mainEntry) to fetch current entry content
   let mainEntryId: string | undefined
+  const imageAttachments: Array<{ url: string; mediaType: string; filename?: string }> = []
   let normalizedUIMessages = Array.isArray(messages)
     ? messages.map((m: any) => {
         const parts = Array.isArray(m?.parts) ? m.parts : []
@@ -249,17 +331,64 @@ app.post("/ai/chat", async (c) => {
             normParts.push({ type: "text", text: p.data.text })
           } else if (p?.type === "file") {
             // keep files in case provider supports them
-            normParts.push({
+            // Inline local file:// to data URL so providers can consume
+            let fileUrl: string | undefined = p.url
+            try {
+              if (typeof fileUrl === "string" && fileUrl.startsWith("file://")) {
+                const filepath = fileUrl.replace(/^file:\/\//, "")
+                const buf = fs.readFileSync(filepath)
+                const base64 = buf.toString("base64")
+                fileUrl = `data:${p.mediaType || "application/octet-stream"};base64,${base64}`
+              }
+            } catch (e) {
+              console.warn("[ai-proxy] failed to inline local file in message", e)
+            }
+            const filePart = {
               type: "file",
               mediaType: p.mediaType,
               filename: p.filename,
-              url: p.url,
-            })
+              url: fileUrl,
+            }
+            normParts.push(filePart as any)
+            // Collect image files for vision pipeline as well
+            if (
+              typeof p.mediaType === "string" &&
+              p.mediaType.startsWith("image/") &&
+              typeof p.url === "string" &&
+              p.url
+            ) {
+              imageAttachments.push({
+                url: p.url,
+                mediaType: p.mediaType,
+                filename: typeof p.filename === "string" ? p.filename : undefined,
+              })
+            }
           } else if (p?.type === "data-block" && Array.isArray(p.data)) {
             // Extract context blocks
             for (const block of p.data) {
               if (block && block.type === "mainEntry" && typeof block.value === "string") {
                 mainEntryId = block.value
+              } else if (
+                block &&
+                block.type === "fileAttachment" &&
+                block.attachment &&
+                typeof block.attachment?.serverUrl === "string" &&
+                typeof block.attachment?.type === "string" &&
+                block.attachment.serverUrl &&
+                block.attachment.type
+              ) {
+                // Collect image attachments (for two-stage vision pipeline)
+                const mediaType = String(block.attachment.type)
+                if (mediaType.startsWith("image/")) {
+                  imageAttachments.push({
+                    url: String(block.attachment.serverUrl),
+                    mediaType,
+                    filename:
+                      typeof block.attachment?.name === "string"
+                        ? block.attachment.name
+                        : undefined,
+                  })
+                }
               }
             }
           }
@@ -403,6 +532,453 @@ app.post("/ai/chat", async (c) => {
     })
   }
 
+  // If two-stage vision is enabled but we didn't receive explicit image attachments,
+  // try to extract images from the entry content via local proxy (even when inline
+  // context is provided), so the vision stage can still work for article pages.
+  try {
+    const enableTwoStage = (() => {
+      const n = (process.env.ENABLE_TWO_STAGE_VISION || "").trim().toLowerCase()
+      if (!n) return true // default: enabled
+      return !["0", "false", "no", "off"].includes(n)
+    })()
+
+    if (enableTwoStage && imageAttachments.length === 0 && mainEntryId) {
+      const selfOrigin = (() => {
+        try {
+          const u = new URL(c.req.url)
+          return u.origin
+        } catch {
+          const port = Number(process.env.PORT || 3000)
+          return `http://127.0.0.1:${port}`
+        }
+      })()
+
+      const headers = buildUpstreamHeaders(c)
+      let baseUrl = ""
+      let htmlContent: string | undefined
+      try {
+        const res = await fetch(
+          `${selfOrigin}/proxy/entries?id=${encodeURIComponent(mainEntryId)}`,
+          { headers },
+        )
+        if (res.ok) {
+          const json: any = await res.json()
+          const data = json?.data
+          baseUrl = data?.entries?.url || ""
+          htmlContent = data?.entries?.content || data?.entries?.description || undefined
+        }
+      } catch (error) {
+        console.warn("[ai-proxy] /proxy/entries fetch failed", error)
+      }
+      if (!htmlContent) {
+        try {
+          const res2 = await fetch(
+            `${selfOrigin}/proxy/entries/readability?id=${encodeURIComponent(mainEntryId)}`,
+            { headers },
+          )
+          if (res2.ok) {
+            const json2: any = await res2.json()
+            htmlContent = json2?.data?.content || htmlContent
+          }
+        } catch (error) {
+          console.warn("[ai-proxy] /proxy/entries/readability fetch failed", error)
+        }
+      }
+
+      if (htmlContent) {
+        const abs = (u: string) => {
+          try {
+            return new URL(u, baseUrl || undefined).href
+          } catch {
+            return u
+          }
+        }
+        const guessType = (u: string) => {
+          const lower = u.toLowerCase()
+          if (lower.endsWith(".png")) return "image/png"
+          if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg"
+          if (lower.endsWith(".webp")) return "image/webp"
+          if (lower.endsWith(".gif")) return "image/gif"
+          if (lower.endsWith(".svg")) return "image/svg+xml"
+          return "image/*"
+        }
+        const urls = new Set<string>()
+        // <img src="...">
+        const imgSrcRe = /<img[^>]+src\s*=\s*['"]([^'"\s>]+)['"][^>]*>/gi
+        let m: RegExpExecArray | null
+        while ((m = imgSrcRe.exec(htmlContent))) {
+          urls.add(abs(m[1]))
+        }
+        // common lazy attrs
+        const lazyRe =
+          /<img[^>]+(?:data-src|data-original|data-lazy-src)\s*=\s*['"]([^'"\s>]+)['"][^>]*>/gi
+        while ((m = lazyRe.exec(htmlContent))) {
+          urls.add(abs(m[1]))
+        }
+        // srcset (take the first candidate)
+        const srcsetRe = /<img[^>]+srcset\s*=\s*['"]([^'"]+)['"][^>]*>/gi
+        while ((m = srcsetRe.exec(htmlContent))) {
+          const first = m[1].split(",")[0]?.trim().split(" ")[0]
+          if (first) urls.add(abs(first))
+        }
+        // <source srcset>
+        const sourceRe = /<source[^>]+srcset\s*=\s*['"]([^'"]+)['"][^>]*>/gi
+        while ((m = sourceRe.exec(htmlContent))) {
+          const first = m[1].split(",")[0]?.trim().split(" ")[0]
+          if (first) urls.add(abs(first))
+        }
+
+        const collected = Array.from(urls)
+          .filter((u) => /^(?:https?:)?\/\//.test(u))
+          .slice(0, toNumber(process.env.VISION_MAX_IMAGES) ?? 4)
+          .map((u) => ({ url: u, mediaType: guessType(u) }))
+
+        if (collected.length > 0) {
+          imageAttachments.push(...collected)
+          console.info("[ai-proxy] collected entry images for vision", {
+            count: collected.length,
+          })
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[ai-proxy] failed to collect entry images for vision", e)
+  }
+
+  // Optional: Two-stage vision pipeline — analyze image attachments with a vision model, then
+  // inject the structured analysis as text context before delegating to the text model.
+  try {
+    const enableTwoStage = (() => {
+      const n = (process.env.ENABLE_TWO_STAGE_VISION || "").trim().toLowerCase()
+      if (!n) return true // default: enabled
+      return !["0", "false", "no", "off"].includes(n)
+    })()
+    const visionModel = process.env.VISION_MODEL || "qwen3-vl-plus"
+    // Deduplicate and cap number of images
+    const uniqueImages: Array<{ url: string; mediaType: string; filename?: string }> = []
+    const seen = new Set<string>()
+    for (const img of imageAttachments) {
+      if (!img?.url || seen.has(img.url)) continue
+      seen.add(img.url)
+      uniqueImages.push(img)
+    }
+    const maxImages = toNumber(process.env.VISION_MAX_IMAGES) ?? 4
+    const selectedImages = uniqueImages.slice(0, Math.max(0, maxImages))
+
+    // Optional: persist the first incoming image to a local path when configured
+    const saveImagePath = (process.env.SAVE_IMAGE_PATH || "").trim()
+    if (saveImagePath && selectedImages.length > 0) {
+      const toBuffer = async (url: string): Promise<Buffer | null> => {
+        try {
+          if (url.startsWith("data:")) {
+            const comma = url.indexOf(",")
+            if (comma !== -1) {
+              const b64 = url.slice(comma + 1)
+              return Buffer.from(b64, "base64")
+            }
+            return null
+          }
+          if (url.startsWith("file://")) {
+            const fp = url.replace(/^file:\/\//, "")
+            return fs.readFileSync(fp)
+          }
+          const controller = new AbortController()
+          const t = setTimeout(
+            () => controller.abort(),
+            Math.max(2000, toNumber(process.env.VISION_FETCH_TIMEOUT_MS) ?? 5000),
+          )
+          const res = await fetch(url, { signal: controller.signal })
+          clearTimeout(t)
+          if (!res.ok) return null
+          const ab = await res.arrayBuffer()
+          return Buffer.from(new Uint8Array(ab))
+        } catch {
+          return null
+        }
+      }
+
+      try {
+        const first = selectedImages[0]
+        const buf: Buffer | null = await toBuffer(first.url)
+        // If we couldn't fetch, skip silently
+        if (buf) {
+          fs.mkdirSync(dirname(saveImagePath), { recursive: true })
+          fs.writeFileSync(saveImagePath, buf)
+          console.info("[ai-proxy] saved incoming image to", saveImagePath)
+        } else {
+          console.warn("[ai-proxy] failed to save incoming image: no data")
+        }
+      } catch (e) {
+        console.warn("[ai-proxy] save image error", e)
+      }
+    }
+
+    if (enableTwoStage && visionModel && selectedImages.length > 0) {
+      // Build a compact vision prompt and call non-streaming
+      const visionLanguage = (process.env.DEFAULT_RESPONSE_LANGUAGE || "zh-CN").toLowerCase()
+      const visionSystem = visionLanguage.startsWith("zh")
+        ? [
+            "你是图像理解助手。",
+            "请仅输出严格的 JSON，不要包含额外文字。",
+            "字段: captions(数组), ocr(字符串), insights(数组)。",
+            "- captions: 每张图一句话概述（按顺序）。",
+            "- ocr: 识别到的关键文字（合并为一段，可为空）。",
+            "- insights: 3-6 条要点，描述图表/关系/异常。",
+          ].join("\n")
+        : [
+            "You are a vision analysis assistant.",
+            "Output strict JSON only, no extra text.",
+            "Fields: captions(array), ocr(string), insights(array).",
+            "- captions: one sentence per image (in order).",
+            "- ocr: important recognized text (single paragraph, optional).",
+            "- insights: 3–6 bullet points about charts/relations/anomalies.",
+          ].join("\n")
+
+      // Helper: inline or proxy a remote image so providers can always access it.
+      const attemptInlineOrProxy = async (rawUrl: string, fallbackMime?: string) => {
+        const finalUrl = rawUrl
+        try {
+          // file:// -> data URL
+          if (typeof finalUrl === "string" && finalUrl.startsWith("file://")) {
+            const filepath = finalUrl.replace(/^file:\/\//, "")
+            const data = fs.readFileSync(filepath)
+            const base64 = data.toString("base64")
+            return `data:${fallbackMime || "application/octet-stream"};base64,${base64}`
+          }
+          // http(s) -> try inline; on failure, try proxy; if still failing, return proxy URL (non-inlined)
+          if (typeof finalUrl === "string" && /^https?:\/\//i.test(finalUrl)) {
+            const fetchOnce = async (u: string) => {
+              const controller = new AbortController()
+              const t = setTimeout(
+                () => controller.abort(),
+                Math.max(2000, toNumber(process.env.VISION_FETCH_TIMEOUT_MS) ?? 5000),
+              )
+              try {
+                const res = await fetch(u, { signal: controller.signal })
+                if (!res.ok) return null
+                const ct = res.headers.get("content-type") || fallbackMime || "image/jpeg"
+                const buf = new Uint8Array(await res.arrayBuffer())
+                const maxBytes = toNumber(process.env.VISION_MAX_INLINE_BYTES) ?? 2000000
+                if (ct.startsWith("image/") && buf.byteLength <= maxBytes) {
+                  return `data:${ct};base64,${Buffer.from(buf).toString("base64")}`
+                }
+                return null
+              } catch {
+                return null
+              } finally {
+                clearTimeout(t)
+              }
+            }
+
+            // Try inline directly
+            const inlined = await fetchOnce(finalUrl)
+            if (inlined) return inlined
+
+            // Try via image proxy
+            const proxyBase = (
+              process.env.VISION_IMAGE_PROXY_URL || "https://webp.follow.is"
+            ).replace(/\/$/, "")
+            const proxied = `${proxyBase}?url=${encodeURIComponent(finalUrl)}`
+            const inlinedViaProxy = await fetchOnce(proxied)
+            if (inlinedViaProxy) return inlinedViaProxy
+            // As a last resort, return proxied URL（不内联也至少可被部分模型拉取）
+            return proxied
+          }
+        } catch (e) {
+          console.warn("[ai-proxy] attemptInlineOrProxy error", (e as any)?.message || e)
+        }
+        return finalUrl
+      }
+
+      const visionParts: any[] = []
+      for (const img of selectedImages) {
+        const finalUrl = await attemptInlineOrProxy(img.url, img.mediaType)
+        visionParts.push({
+          type: "file",
+          mediaType: img.mediaType,
+          url: finalUrl,
+          filename: img.filename,
+        })
+      }
+      visionParts.push({
+        type: "text",
+        text: visionLanguage.startsWith("zh")
+          ? "请分析这些图片并返回 JSON。"
+          : "Analyze these images and return JSON only.",
+      })
+
+      // Create a dedicated call with the vision model
+      const visionTimeoutMs = toNumber(process.env.VISION_TIMEOUT_MS) ?? 15000
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), Math.max(2000, visionTimeoutMs))
+      let visionText = ""
+      try {
+        const visionResult = await generateText({
+          model: createOpenAI({ apiKey: process.env.IFLOW_API_KEY!, baseURL: IFLOW_BASE_URL }).chat(
+            visionModel,
+          ),
+          system: visionSystem,
+          messages: convertToCoreMessages([{ role: "user", parts: visionParts }]),
+          maxOutputTokens: 800,
+          abortSignal: controller.signal,
+          maxRetries: 0,
+        })
+        visionText = (visionResult?.text || "").trim()
+      } catch (err: any) {
+        const reason = controller.signal.aborted ? "timeout" : err?.message || String(err)
+        console.warn("[ai-proxy] vision analysis failed", { reason })
+      } finally {
+        clearTimeout(timeout)
+      }
+      if (visionText) {
+        const contextHeader = visionLanguage.startsWith("zh")
+          ? "Context: Vision analysis (JSON)"
+          : "Context: Vision analysis (JSON)"
+        const contextText = `${contextHeader}\n${visionText}`.slice(0, 32000)
+
+        // Inject into the first user message
+        const firstUserIndex = normalizedUIMessages.findIndex((m: any) => m?.role === "user")
+        if (firstUserIndex !== -1) {
+          const target = normalizedUIMessages[firstUserIndex]
+          target.parts = Array.isArray(target.parts) ? target.parts : []
+          target.parts.unshift({ type: "text", text: contextText })
+        } else {
+          normalizedUIMessages.unshift({
+            role: "user",
+            parts: [{ type: "text", text: contextText }],
+          })
+        }
+        console.info("[ai-proxy] injected vision analysis", {
+          images: selectedImages.length,
+          model: visionModel,
+          textLength: contextText.length,
+        })
+      } else {
+        // Prefer: vision -> text model (non-stream summary -> inject -> text model streaming)
+        const preferToText = (() => {
+          const n = (process.env.VISION_FALLBACK_TO_TEXT || "1").trim().toLowerCase()
+          return !["0", "false", "no", "off"].includes(n)
+        })()
+        const allowVisionStream = (() => {
+          const n = (process.env.VISION_FALLBACK_STREAM || "0").trim().toLowerCase()
+          return !["0", "false", "no", "off"].includes(n)
+        })()
+
+        if (preferToText) {
+          try {
+            const promptParts: any[] = []
+            for (const img of selectedImages) {
+              const finalUrl = await attemptInlineOrProxy(img.url, img.mediaType)
+              promptParts.push({
+                type: "file",
+                mediaType: img.mediaType,
+                url: finalUrl,
+                filename: img.filename,
+              })
+            }
+            promptParts.push({
+              type: "text",
+              text: visionLanguage.startsWith("zh")
+                ? "请根据这些图片给出简洁准确的文字描述与要点归纳。"
+                : "Provide a concise and accurate description with key points for these images.",
+            })
+
+            const openaiV = createOpenAI({
+              apiKey: process.env.IFLOW_API_KEY!,
+              baseURL: IFLOW_BASE_URL,
+            })
+            const sum = await generateText({
+              model: openaiV.chat(visionModel),
+              system: visionSystem,
+              messages: convertToCoreMessages([{ role: "user", parts: promptParts }]),
+              maxOutputTokens: 800,
+              maxRetries: 0,
+            })
+            const s = (sum?.text || "").trim()
+            if (s) {
+              const header = visionLanguage.startsWith("zh")
+                ? "Context: Vision analysis (fallback)"
+                : "Context: Vision analysis (fallback)"
+              const textToInject = `${header}\n${s}`.slice(0, 32000)
+              const idx = normalizedUIMessages.findIndex((m: any) => m?.role === "user")
+              if (idx !== -1) {
+                const t = normalizedUIMessages[idx]
+                t.parts = Array.isArray(t.parts) ? t.parts : []
+                t.parts.unshift({ type: "text", text: textToInject })
+              } else {
+                normalizedUIMessages.unshift({
+                  role: "user",
+                  parts: [{ type: "text", text: textToInject }],
+                })
+              }
+              console.info("[ai-proxy] vision fallback -> text model", {
+                images: selectedImages.length,
+                model: visionModel,
+              })
+              // Do not return here — continue to text model below.
+            } else if (allowVisionStream) {
+              const openaiVision = createOpenAI({
+                apiKey: process.env.IFLOW_API_KEY!,
+                baseURL: IFLOW_BASE_URL,
+              })
+              const visionStream = streamText({
+                model: openaiVision.chat(visionModel),
+                messages: convertToCoreMessages(normalizedUIMessages),
+              })
+              console.info("[ai-proxy] vision fallback streaming", {
+                images: selectedImages.length,
+                model: visionModel,
+              })
+              return visionStream.toUIMessageStreamResponse({
+                onError: (err) =>
+                  typeof err === "string" ? err : (err as any)?.message || "Unknown error",
+              })
+            }
+          } catch (e) {
+            console.warn("[ai-proxy] vision fallback to text failed", (e as any)?.message || e)
+            if (allowVisionStream) {
+              const openaiVision = createOpenAI({
+                apiKey: process.env.IFLOW_API_KEY!,
+                baseURL: IFLOW_BASE_URL,
+              })
+              const visionStream = streamText({
+                model: openaiVision.chat(visionModel),
+                messages: convertToCoreMessages(normalizedUIMessages),
+              })
+              console.info("[ai-proxy] vision fallback streaming", {
+                images: selectedImages.length,
+                model: visionModel,
+              })
+              return visionStream.toUIMessageStreamResponse({
+                onError: (err) =>
+                  typeof err === "string" ? err : (err as any)?.message || "Unknown error",
+              })
+            }
+          }
+        } else if (allowVisionStream) {
+          const openaiVision = createOpenAI({
+            apiKey: process.env.IFLOW_API_KEY!,
+            baseURL: IFLOW_BASE_URL,
+          })
+          const visionStream = streamText({
+            model: openaiVision.chat(visionModel),
+            messages: convertToCoreMessages(normalizedUIMessages),
+          })
+          console.info("[ai-proxy] vision fallback streaming", {
+            images: selectedImages.length,
+            model: visionModel,
+          })
+          return visionStream.toUIMessageStreamResponse({
+            onError: (err) =>
+              typeof err === "string" ? err : (err as any)?.message || "Unknown error",
+          })
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[ai-proxy] two-stage vision pipeline failed", e)
+  }
+
   // Use Chat Completions endpoint explicitly for OpenAI-compatible providers like iflow
   // Resolve max output tokens with sensible defaults (to avoid truncated summaries)
   const reqMaxOutputTokensRaw = (body && (body.maxOutputTokens ?? body.max_tokens)) as
@@ -422,18 +998,43 @@ app.post("/ai/chat", async (c) => {
       ? Number(reqMaxOutputTokens ?? envDefaultMax ?? defaultMaxForScene)
       : undefined
 
+  const allowSamplingControls = !isReasoningModelId(modelId)
+  const requestTemperature = toNumber(reqTemperature)
+  const envTemperature = toNumber(process.env.DEFAULT_TEMPERATURE)
+  const effectiveTemperature = allowSamplingControls
+    ? (requestTemperature ?? envTemperature)
+    : undefined
+
+  const reasoningEffort =
+    parseReasoningEffort((body?.reasoning as any)?.effort) ??
+    parseReasoningEffort(body?.reasoningEffort) ??
+    parseReasoningEffort(body?.model_reasoning_effort) ??
+    parseReasoningEffort(process.env.DEFAULT_REASONING_EFFORT)
+
+  const disableResponseStorage =
+    parseBoolean(body?.disableResponseStorage) ??
+    parseBoolean(body?.disable_response_storage) ??
+    parseBoolean(process.env.DISABLE_RESPONSE_STORAGE)
+
+  const openaiProviderOptions: Record<string, unknown> = {}
+  if (reasoningEffort) {
+    openaiProviderOptions.reasoningEffort = reasoningEffort
+  }
+  if (disableResponseStorage != null) {
+    openaiProviderOptions.store = disableResponseStorage ? false : true
+  }
+  const finalProviderOptions =
+    Object.keys(openaiProviderOptions).length > 0 ? { openai: openaiProviderOptions } : undefined
+
   const result = streamText({
     model: openai.chat(modelId),
     messages: convertToCoreMessages(normalizedUIMessages),
     ...(system ? { system } : {}),
-    // Temperature precedence: request > env > provider default
-    ...(reqTemperature != null
-      ? { temperature: Number(reqTemperature) }
-      : process.env.DEFAULT_TEMPERATURE
-        ? { temperature: Number(process.env.DEFAULT_TEMPERATURE) }
-        : {}),
+    // Temperature precedence: request > env; ignored for reasoning models
+    ...(effectiveTemperature != null ? { temperature: effectiveTemperature } : {}),
     // Allow larger outputs to reduce truncation in timeline summaries
     ...(finalMaxOutputTokens ? { maxOutputTokens: finalMaxOutputTokens } : {}),
+    ...(finalProviderOptions ? { providerOptions: finalProviderOptions } : {}),
   })
 
   // Return as AI SDK UI Message stream (SSE JSON events)
