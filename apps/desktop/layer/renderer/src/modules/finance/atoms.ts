@@ -10,7 +10,7 @@ export type AsharesWatchItem = {
 
 // Persisted open/close state for the A-shares group in sidebar
 export const [, , useAsharesOpen, , getAsharesOpen, setAsharesOpen] = createAtomHooks(
-  atomWithStorage(getStorageNS("finance-ashares-open"), true, undefined, {
+  atomWithStorage(getStorageNS("finance-ashares-open"), false, undefined, {
     getOnInit: true,
   }),
 )
@@ -88,7 +88,7 @@ export const [, , useLastUs, , getLastUs, setLastUs] = createAtomHooks(
 
 // -------------------- Nasdaq presets --------------------
 export const [, , useNasdaqOpen, , getNasdaqOpen, setNasdaqOpen] = createAtomHooks(
-  atomWithStorage(getStorageNS("finance-nasdaq-open"), true, undefined, {
+  atomWithStorage(getStorageNS("finance-nasdaq-open"), false, undefined, {
     getOnInit: true,
   }),
 )

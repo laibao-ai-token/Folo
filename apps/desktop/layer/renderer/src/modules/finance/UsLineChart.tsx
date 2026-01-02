@@ -161,6 +161,25 @@ function buildLineOption({
   closes: number[]
   prevClose: number
 }) {
+  // Format ISO timestamps (e.g. 2025-11-28T14:30:00.000Z) into a friendlier
+  // local string so the axis does not show raw ISO values.
+  const formatLabel = (v: string): string => {
+    if (!v) return v
+    // Intraday from Yahoo uses ISO; convert to local time string.
+    if (v.includes("T")) {
+      const d = new Date(v)
+      if (Number.isNaN(d.getTime())) return v
+      const y = d.getFullYear()
+      const m = String(d.getMonth() + 1).padStart(2, "0")
+      const day = String(d.getDate()).padStart(2, "0")
+      const hh = String(d.getHours()).padStart(2, "0")
+      const mm = String(d.getMinutes()).padStart(2, "0")
+      return `${y}-${m}-${day} ${hh}:${mm}`
+    }
+    // For daily data, keep as-is (already YYYY-MM-DD).
+    return v
+  }
+
   return {
     grid: { left: 8, right: 8, top: 4, bottom: 36, containLabel: true },
     xAxis: {
@@ -169,7 +188,10 @@ function buildLineOption({
       boundaryGap: false,
       axisTick: { show: false },
       axisLine: { lineStyle: { color: "#444" } },
-      axisLabel: { color: "#9ca3af" },
+      axisLabel: {
+        color: "#9ca3af",
+        formatter: (value: string) => formatLabel(value),
+      },
     },
     yAxis: {
       type: "value",

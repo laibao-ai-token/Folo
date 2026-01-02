@@ -65,14 +65,23 @@ export function Component() {
               : "金融"}
         </h1>
         {showAsharesQuoteInHeader && (
-          <p className="text-text-secondary text-base">{quoteQuery.data?.code || effectiveCode}</p>
+          <>
+            <p className="text-text-secondary text-base">
+              {quoteQuery.data?.code || effectiveCode}
+            </p>
+            {/* Align with US header: show market label under code */}
+            <p className="text-text-secondary text-base">{titleText || "A股"}</p>
+          </>
         )}
         {showUsQuoteInHeader && (
-          <p className="text-text-secondary text-base">
-            {(usHeaderQuery.data?.symbol || code).toUpperCase()}
-          </p>
+          <>
+            <p className="text-text-secondary text-base">
+              {(usHeaderQuery.data?.symbol || code).toUpperCase()}
+            </p>
+            <p className="text-text-secondary text-base">{titleText || "美股"}</p>
+          </>
         )}
-        {!showAsharesQuoteInHeader && titleText && (
+        {!showAsharesQuoteInHeader && !showUsQuoteInHeader && titleText && (
           <p className="text-text-secondary text-base">{titleText}</p>
         )}
       </div>
@@ -81,9 +90,7 @@ export function Component() {
         {type === "ashares" && (
           <AsharesQuoteCard defaultCode={effectiveCode || undefined} autoQuery={!!effectiveCode} />
         )}
-        {type === "us" && !!code && (
-          <UsQuoteCard defaultSymbol={code.toUpperCase()} autoQuery hideForm />
-        )}
+        {type === "us" && !!code && <UsQuoteCard defaultSymbol={code.toUpperCase()} autoQuery />}
         {/* Nasdaq: show details only when a symbol/code is selected */}
         {showNasdaqDetails && (
           <NasdaqIndexCard defaultId={nasdaqId} defaultInput={code || undefined} />

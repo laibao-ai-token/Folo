@@ -68,7 +68,7 @@ export function UsQuoteCard({
         "mx-auto w-full",
         hideForm
           ? "max-w-6xl"
-          : "border-border bg-material-ultra-thin max-w-3xl rounded-lg border p-4",
+          : "border-border bg-material-ultra-thin max-w-xl rounded-lg border p-4",
       )}
     >
       {!hideForm && (

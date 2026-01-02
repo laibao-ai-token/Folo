@@ -1,13 +1,27 @@
+import { cn } from "@follow/utils/utils"
 import { useQuery } from "@tanstack/react-query"
 import { useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { AsharesKline } from "./AsharesKline"
+import type { Timeframe as AsharesTimeframe } from "./AsharesLineChart"
+import { AsharesLineChart } from "./AsharesLineChart"
 import { setLastNasdaq } from "./atoms"
 import type { NasdaqItem } from "./constants/nasdaq"
 import { nasdaqItems } from "./constants/nasdaq"
-import { fetchQuoteByCode } from "./eastmoney"
-import { ensureEcharts, fetchUsKlineViaYahoo, fetchUsQuoteBySymbol } from "./us"
+import {
+  compute52WeekRange,
+  computeAvgVolumes,
+  computeDeviationThresholds,
+  computeMASummary,
+  fetchKlineByCode,
+  fetchQuoteByCode,
+  judgeVolumeStatus,
+} from "./eastmoney"
+import { fetchUsKlineViaYahoo, fetchUsQuoteBySymbol } from "./us"
+import type { UsTimeframe } from "./UsLineChart"
+import { UsLineChart } from "./UsLineChart"
+
+type UnifiedTimeframe = AsharesTimeframe & UsTimeframe
 
 export function NasdaqIndexCard({
   defaultId,
@@ -18,6 +32,7 @@ export function NasdaqIndexCard({
 }) {
   const { t } = useTranslation()
   const [selected, setSelected] = useState<NasdaqItem | null>(null)
+  const [timeframe, setTimeframe] = useState<UnifiedTimeframe>("1M")
 
   const list = useMemo(() => nasdaqItems, [])
 
@@ -66,14 +81,26 @@ export function NasdaqIndexCard({
     staleTime: 15_000,
   })
 
+  // For richer stats we need a kline payload, similar to A股/美股详情卡
   const usKlineQuery = useQuery({
-    queryKey: ["finance", "nasdaq", "kline", activeUs],
+    queryKey: ["finance", "nasdaq", "us", "kline", activeUs],
     queryFn: async () => {
       if (!activeUs) throw new Error("empty")
       return await fetchUsKlineViaYahoo(activeUs, { range: "5y", interval: "1d" })
     },
     enabled: !!activeUs,
     staleTime: 60_000,
+  })
+
+  const cnKlineQuery = useQuery({
+    queryKey: ["finance", "nasdaq", "cn", "kline", activeCn],
+    queryFn: async () => {
+      if (!activeCn) throw new Error("empty")
+      return await fetchKlineByCode(activeCn, { klt: 101, lmt: 260, fqt: 1 })
+    },
+    enabled: !!activeCn,
+    staleTime: 60 * 60 * 1000,
+    refetchOnWindowFocus: false,
   })
 
   useEffect(() => {
@@ -100,7 +127,7 @@ export function NasdaqIndexCard({
         )}
 
         {activeUs && usQuoteQuery.isSuccess && usQuoteQuery.data && (
-          <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+          <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm leading-6 md:grid-cols-3 xl:grid-cols-4">
             <KV
               label={t("finance.kv.code", { defaultValue: "代码" })}
               value={usQuoteQuery.data.symbol}
@@ -139,11 +166,157 @@ export function NasdaqIndexCard({
                 value={new Date(usQuoteQuery.data.timestampMs).toLocaleString()}
               />
             )}
+            {/* Derived from kline: 52W range, MA20/60 dev, volumes, ratio */}
+            {usKlineQuery.isSuccess &&
+              usKlineQuery.data &&
+              (() => {
+                const rows = usKlineQuery.data.rows as any
+                const { high52, low52 } = compute52WeekRange(rows, 260)
+                if (high52 && low52 && high52 > low52 && usQuoteQuery.data) {
+                  const pctl =
+                    Math.max(0, Math.min(1, (usQuoteQuery.data.price - low52) / (high52 - low52))) *
+                    100
+                  return (
+                    <>
+                      <KV
+                        label={t("finance.kv.high_52w", { defaultValue: "52周高" })}
+                        value={high52.toFixed(2)}
+                      />
+                      <KV
+                        label={t("finance.kv.low_52w", { defaultValue: "52周低" })}
+                        value={low52.toFixed(2)}
+                      />
+                      <KV
+                        label={t("finance.kv.pctl_52w", { defaultValue: "年内百分位" })}
+                        value={`${pctl.toFixed(2)}%`}
+                      />
+                    </>
+                  )
+                }
+              })()}
+
+            {usKlineQuery.isSuccess &&
+              usKlineQuery.data &&
+              (() => {
+                const rows = usKlineQuery.data.rows as any
+                const { ma20, ma60 } = computeMASummary(rows)
+                const dev20 = ma20 ? ((usQuoteQuery.data!.price - ma20) / ma20) * 100 : undefined
+                const dev60 = ma60 ? ((usQuoteQuery.data!.price - ma60) / ma60) * 100 : undefined
+                const th = computeDeviationThresholds(rows)
+                const dev20Warn = th.dev20.p75 ?? 3
+                const dev20High = th.dev20.p90 ?? 5
+                const dev60Warn = th.dev60.p75 ?? 5
+                const dev60High = th.dev60.p90 ?? 8
+                const cls = (v?: number, warn?: number, high?: number) =>
+                  typeof v === "number" && warn != null && high != null
+                    ? Math.abs(v) >= high
+                      ? "text-red"
+                      : Math.abs(v) >= warn
+                        ? "text-orange"
+                        : ""
+                    : ""
+                return (
+                  <>
+                    {typeof ma20 === "number" && (
+                      <KV
+                        label={t("finance.kv.ma20", { defaultValue: "MA20" })}
+                        value={ma20.toFixed(2)}
+                      />
+                    )}
+                    {typeof dev20 === "number" && (
+                      <KV
+                        label={t("finance.kv.dev_ma20", { defaultValue: "偏离(MA20)" })}
+                        value={`${dev20.toFixed(2)}%`}
+                        className={cls(dev20, dev20Warn, dev20High)}
+                      />
+                    )}
+                    {typeof ma60 === "number" && (
+                      <KV
+                        label={t("finance.kv.ma60", { defaultValue: "MA60" })}
+                        value={ma60.toFixed(2)}
+                      />
+                    )}
+                    {typeof dev60 === "number" && (
+                      <KV
+                        label={t("finance.kv.dev_ma60", { defaultValue: "偏离(MA60)" })}
+                        value={`${dev60.toFixed(2)}%`}
+                        className={cls(dev60, dev60Warn, dev60High)}
+                      />
+                    )}
+                  </>
+                )
+              })()}
+
+            {usKlineQuery.isSuccess &&
+              usKlineQuery.data &&
+              (() => {
+                const rows = usKlineQuery.data.rows as any
+                const { avgVol5, avgVol10, avgVol20 } = computeAvgVolumes(rows)
+                const volRatio =
+                  avgVol5 && avgVol5 > 0
+                    ? (usQuoteQuery.data!.volumeShares || 0) / avgVol5
+                    : undefined
+                const status = judgeVolumeStatus(volRatio)
+                const statusLabel =
+                  status === "very-high"
+                    ? t("finance.volume_status.very_high", { defaultValue: "显著放量" })
+                    : status === "high"
+                      ? t("finance.volume_status.high", { defaultValue: "放量" })
+                      : status === "low"
+                        ? t("finance.volume_status.low", { defaultValue: "缩量" })
+                        : status === "very-low"
+                          ? t("finance.volume_status.very_low", {
+                              defaultValue: "显著缩量",
+                            })
+                          : t("finance.volume_status.normal", { defaultValue: "中性" })
+                const ratioCls =
+                  status === "very-high" || status === "very-low"
+                    ? "text-red"
+                    : status === "high" || status === "low"
+                      ? "text-orange"
+                      : ""
+                return (
+                  <>
+                    {typeof avgVol5 === "number" && (
+                      <KV
+                        label={t("finance.kv.avg_vol5", { defaultValue: "5日均量" })}
+                        value={avgVol5.toLocaleString()}
+                      />
+                    )}
+                    {typeof avgVol10 === "number" && (
+                      <KV
+                        label={t("finance.kv.avg_vol10", { defaultValue: "10日均量" })}
+                        value={avgVol10.toLocaleString()}
+                      />
+                    )}
+                    {typeof avgVol20 === "number" && (
+                      <KV
+                        label={t("finance.kv.avg_vol20", { defaultValue: "20日均量" })}
+                        value={avgVol20.toLocaleString()}
+                      />
+                    )}
+                    {typeof volRatio === "number" && (
+                      <KV
+                        label={t("finance.kv.vol_ratio", { defaultValue: "量比(简)" })}
+                        value={volRatio.toFixed(2)}
+                        className={ratioCls}
+                      />
+                    )}
+                    {status && (
+                      <KV
+                        label={t("finance.kv.volume_status", { defaultValue: "量能状态" })}
+                        value={statusLabel}
+                        className={ratioCls}
+                      />
+                    )}
+                  </>
+                )
+              })()}
           </div>
         )}
 
         {activeCn && cnQuoteQuery.isSuccess && cnQuoteQuery.data && (
-          <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+          <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm leading-6 md:grid-cols-3 xl:grid-cols-4">
             <KV
               label={t("finance.kv.code", { defaultValue: "代码" })}
               value={cnQuoteQuery.data.code}
@@ -176,28 +349,242 @@ export function NasdaqIndexCard({
               label={t("finance.kv.prevClose", { defaultValue: "昨收" })}
               value={cnQuoteQuery.data.prevClose.toFixed(2)}
             />
+            <KV
+              label={t("finance.kv.volume", { defaultValue: "成交量" })}
+              value={cnQuoteQuery.data.volumeShares.toLocaleString()}
+            />
+            <KV
+              label={t("finance.kv.amount", { defaultValue: "成交额(¥)" })}
+              value={Math.round(cnQuoteQuery.data.turnoverYuan).toLocaleString()}
+            />
+            <KV
+              label={t("finance.kv.amplitude", { defaultValue: "振幅" })}
+              value={`${cnQuoteQuery.data.amplitudePct.toFixed(2)}%`}
+            />
+            {Number.isFinite(cnQuoteQuery.data.turnoverRatePct) && (
+              <KV
+                label={t("finance.kv.turnoverRate", { defaultValue: "换手率" })}
+                value={`${cnQuoteQuery.data.turnoverRatePct.toFixed(2)}%`}
+              />
+            )}
+            {cnQuoteQuery.data.timestampMs && (
+              <KV
+                label={t("finance.kv.time", { defaultValue: "时间" })}
+                value={new Date(cnQuoteQuery.data.timestampMs).toLocaleString()}
+              />
+            )}
+
+            {/* 52-week range and percentile */}
+            {cnKlineQuery.isSuccess &&
+              cnKlineQuery.data &&
+              (() => {
+                const { high52, low52 } = compute52WeekRange(cnKlineQuery.data.rows, 260)
+                if (!high52 || !low52 || high52 <= low52) return null
+                const pctl =
+                  Math.max(0, Math.min(1, (cnQuoteQuery.data.price - low52) / (high52 - low52))) *
+                  100
+                return (
+                  <>
+                    <KV
+                      label={t("finance.kv.high_52w", { defaultValue: "52周高" })}
+                      value={high52.toFixed(2)}
+                    />
+                    <KV
+                      label={t("finance.kv.low_52w", { defaultValue: "52周低" })}
+                      value={low52.toFixed(2)}
+                    />
+                    <KV
+                      label={t("finance.kv.pctl_52w", { defaultValue: "年内百分位" })}
+                      value={`${pctl.toFixed(2)}%`}
+                    />
+                  </>
+                )
+              })()}
+
+            {/* MA & deviation to MA20/60 with adaptive thresholds */}
+            {cnKlineQuery.isSuccess &&
+              cnKlineQuery.data &&
+              (() => {
+                const { rows } = cnKlineQuery.data
+                const { ma20, ma60 } = computeMASummary(rows)
+                if (!ma20 && !ma60) return null
+                const dev20 =
+                  typeof ma20 === "number" && ma20 !== 0
+                    ? ((cnQuoteQuery.data.price - ma20) / ma20) * 100
+                    : undefined
+                const dev60 =
+                  typeof ma60 === "number" && ma60 !== 0
+                    ? ((cnQuoteQuery.data.price - ma60) / ma60) * 100
+                    : undefined
+                const th = computeDeviationThresholds(rows)
+                const dev20Warn = th.dev20.p75 ?? 3
+                const dev20High = th.dev20.p90 ?? 5
+                const dev60Warn = th.dev60.p75 ?? 5
+                const dev60High = th.dev60.p90 ?? 8
+                const cls = (v: number | undefined, warn: number, high: number) =>
+                  typeof v === "number"
+                    ? Math.abs(v) >= high
+                      ? "text-red"
+                      : Math.abs(v) >= warn
+                        ? "text-orange"
+                        : ""
+                    : ""
+                return (
+                  <>
+                    {typeof ma20 === "number" && (
+                      <KV
+                        label={t("finance.kv.ma20", { defaultValue: "MA20" })}
+                        value={ma20.toFixed(2)}
+                      />
+                    )}
+                    {typeof dev20 === "number" && (
+                      <KV
+                        label={t("finance.kv.dev_ma20", { defaultValue: "偏离(MA20)" })}
+                        value={`${dev20.toFixed(2)}%`}
+                        className={cls(dev20, dev20Warn, dev20High)}
+                      />
+                    )}
+                    {typeof ma60 === "number" && (
+                      <KV
+                        label={t("finance.kv.ma60", { defaultValue: "MA60" })}
+                        value={ma60.toFixed(2)}
+                      />
+                    )}
+                    {typeof dev60 === "number" && (
+                      <KV
+                        label={t("finance.kv.dev_ma60", { defaultValue: "偏离(MA60)" })}
+                        value={`${dev60.toFixed(2)}%`}
+                        className={cls(dev60, dev60Warn, dev60High)}
+                      />
+                    )}
+                  </>
+                )
+              })()}
+
+            {/* Volume averages and ratio */}
+            {cnKlineQuery.isSuccess &&
+              cnKlineQuery.data &&
+              (() => {
+                const { rows } = cnKlineQuery.data
+                const { avgVol5, avgVol10, avgVol20 } = computeAvgVolumes(rows)
+                const volRatio =
+                  avgVol5 && avgVol5 > 0 ? cnQuoteQuery.data.volumeShares / avgVol5 : undefined
+                const status = judgeVolumeStatus(volRatio)
+                const statusLabel =
+                  status === "very-high"
+                    ? t("finance.volume_status.very_high", { defaultValue: "显著放量" })
+                    : status === "high"
+                      ? t("finance.volume_status.high", { defaultValue: "放量" })
+                      : status === "low"
+                        ? t("finance.volume_status.low", { defaultValue: "缩量" })
+                        : status === "very-low"
+                          ? t("finance.volume_status.very_low", {
+                              defaultValue: "显著缩量",
+                            })
+                          : t("finance.volume_status.normal", { defaultValue: "中性" })
+                const ratioCls =
+                  status === "very-high"
+                    ? "text-red"
+                    : status === "high"
+                      ? "text-orange"
+                      : status === "very-low"
+                        ? "text-red"
+                        : status === "low"
+                          ? "text-orange"
+                          : ""
+                return (
+                  <>
+                    {typeof avgVol5 === "number" && (
+                      <KV
+                        label={t("finance.kv.avg_vol5", { defaultValue: "5日均量" })}
+                        value={avgVol5.toLocaleString()}
+                      />
+                    )}
+                    {typeof avgVol10 === "number" && (
+                      <KV
+                        label={t("finance.kv.avg_vol10", { defaultValue: "10日均量" })}
+                        value={avgVol10.toLocaleString()}
+                      />
+                    )}
+                    {typeof avgVol20 === "number" && (
+                      <KV
+                        label={t("finance.kv.avg_vol20", { defaultValue: "20日均量" })}
+                        value={avgVol20.toLocaleString()}
+                      />
+                    )}
+                    {typeof volRatio === "number" && (
+                      <KV
+                        label={t("finance.kv.vol_ratio", { defaultValue: "量比(简)" })}
+                        value={volRatio.toFixed(2)}
+                        className={ratioCls}
+                      />
+                    )}
+                    {status && (
+                      <KV
+                        label={t("finance.kv.volume_status", { defaultValue: "量能状态" })}
+                        value={statusLabel}
+                        className={ratioCls}
+                      />
+                    )}
+                  </>
+                )
+              })()}
+
+            {typeof cnQuoteQuery.data.limitUp === "number" && (
+              <KV
+                label={t("finance.kv.limit_up", { defaultValue: "涨停价" })}
+                value={cnQuoteQuery.data.limitUp.toFixed(2)}
+              />
+            )}
+            {typeof cnQuoteQuery.data.limitDown === "number" && (
+              <KV
+                label={t("finance.kv.limit_down", { defaultValue: "跌停价" })}
+                value={cnQuoteQuery.data.limitDown.toFixed(2)}
+              />
+            )}
+            {cnQuoteQuery.data.sessionStatus && (
+              <KV
+                label={t("finance.kv.session", { defaultValue: "交易状态" })}
+                value={
+                  cnQuoteQuery.data.sessionStatus === "open"
+                    ? t("words.open", { defaultValue: "开盘" })
+                    : t("words.close", { defaultValue: "休市" })
+                }
+              />
+            )}
           </div>
         )}
       </div>
 
-      {/* Kline */}
+      {/* Chart: align with A股 / 美股卡片的折线图样式 */}
       <div className="mt-4">
-        {activeUs && usKlineQuery.error && (
-          <div className="text-xs text-red-500">
-            <span>
-              {(usKlineQuery.error as Error).message || "K线请求失败"}（如遇到 Yahoo
-              限流可稍后再试）
-            </span>
-          </div>
-        )}
-        {activeUs && usKlineQuery.isSuccess && usKlineQuery.data && (
-          <UsKlineChart data={usKlineQuery.data} height={320} />
-        )}
+        {(activeUs || activeCn) && (
+          <>
+            <div className="mb-1 flex flex-wrap items-center gap-1">
+              {(["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "MAX"] as UnifiedTimeframe[]).map(
+                (tf) => (
+                  <button
+                    key={tf}
+                    type="button"
+                    onClick={() => setTimeframe(tf)}
+                    className={cn(
+                      "rounded-md px-2 py-1 text-xs",
+                      timeframe === tf
+                        ? "bg-fill-vibrant text-text"
+                        : "bg-material-ultra-thin text-text-secondary hover:text-text",
+                    )}
+                  >
+                    {tf}
+                  </button>
+                ),
+              )}
+            </div>
 
-        {activeCn && <AsharesKline code={activeCn} years={5} klt={101} fqt={1} height={320} />}
+            {activeUs && <UsLineChart symbol={activeUs} timeframe={timeframe} height={220} />}
+            {activeCn && <AsharesLineChart code={activeCn} timeframe={timeframe} height={220} />}
+          </>
+        )}
       </div>
-
-      {/* Legend removed by request */}
     </div>
   )
 }
@@ -209,161 +596,4 @@ function KV({ label, value }: { label: string; value: string }) {
       <div className="font-medium">{value}</div>
     </div>
   )
-}
-
-function UsKlineChart({
-  data,
-  height = 320,
-}: {
-  data: Awaited<ReturnType<typeof fetchUsKlineViaYahoo>>
-  height?: number
-}) {
-  const id = `us-kline-${data.meta.symbol || "chart"}`
-  return (
-    <div className="w-full">
-      <div className="text-text-tertiary mb-1 text-xs">
-        <span>
-          {data.meta.symbol} · {data.rows.length} bars
-        </span>
-      </div>
-      <EChart id={id} data={data} height={height} />
-    </div>
-  )
-}
-
-function EChart({
-  id,
-  data,
-  height,
-}: {
-  id: string
-  data: Awaited<ReturnType<typeof fetchUsKlineViaYahoo>>
-  height: number
-}) {
-  const containerId = id
-  return (
-    <div
-      id={containerId}
-      style={{ height, width: "100%" }}
-      ref={(el) => {
-        if (!el) return
-        void (async () => {
-          const echarts = await ensureEcharts()
-          const chart = echarts.init(el)
-          chart.setOption(buildOption(data))
-        })()
-      }}
-    />
-  )
-}
-
-function buildOption(payload: Awaited<ReturnType<typeof fetchUsKlineViaYahoo>>) {
-  const category: string[] = []
-  const values: [number, number, number, number][] = []
-  const volumes: number[] = []
-  for (const r of payload.rows) {
-    category.push(r.time)
-    values.push([r.open, r.close, r.low, r.high])
-    volumes.push(r.volumeShares)
-  }
-  const closes = values.map((v) => v[1])
-  const ma = (w: number) => movingAverage(closes, w)
-  return {
-    backgroundColor: "transparent",
-    animation: false,
-    grid: [
-      { left: 8, right: 8, top: 4, height: "68%" },
-      { left: 8, right: 8, top: "78%", height: "18%" },
-    ],
-    tooltip: { trigger: "axis" },
-    axisPointer: { link: [{ xAxisIndex: [0, 1] }] },
-    xAxis: [
-      {
-        type: "category",
-        data: category,
-        boundaryGap: true,
-        axisLine: { onZero: false },
-        min: "dataMin",
-        max: "dataMax",
-      },
-      {
-        type: "category",
-        data: category,
-        gridIndex: 1,
-        boundaryGap: true,
-        axisLine: { onZero: false },
-        min: "dataMin",
-        max: "dataMax",
-      },
-    ],
-    yAxis: [{ scale: true }, { gridIndex: 1, scale: true }],
-    dataZoom: [
-      { type: "inside", xAxisIndex: [0, 1], start: 60, end: 100 },
-      { type: "slider", xAxisIndex: [0, 1], top: 0, height: 14, start: 60, end: 100 },
-    ],
-    series: [
-      {
-        name: "K",
-        type: "candlestick",
-        data: values,
-        itemStyle: {
-          color: "#ef5350",
-          color0: "#26a69a",
-          borderColor: "#ef5350",
-          borderColor0: "#26a69a",
-        },
-      },
-      {
-        name: "MA5",
-        type: "line",
-        data: ma(5),
-        smooth: true,
-        symbol: "none",
-        lineStyle: { width: 1 },
-      },
-      {
-        name: "MA10",
-        type: "line",
-        data: ma(10),
-        smooth: true,
-        symbol: "none",
-        lineStyle: { width: 1 },
-      },
-      {
-        name: "MA20",
-        type: "line",
-        data: ma(20),
-        smooth: true,
-        symbol: "none",
-        lineStyle: { width: 1 },
-      },
-      {
-        name: "MA60",
-        type: "line",
-        data: ma(60),
-        smooth: true,
-        symbol: "none",
-        lineStyle: { width: 1 },
-      },
-      {
-        name: "Vol",
-        type: "bar",
-        xAxisIndex: 1,
-        yAxisIndex: 1,
-        data: volumes,
-        itemStyle: { color: "#90caf9" },
-      },
-    ],
-  } as const
-}
-
-function movingAverage(arr: number[], win: number) {
-  const out = Array.from({ length: arr.length }).fill(null) as (number | null)[]
-  let sum = 0
-  for (let i = 0; i < arr.length; i++) {
-    sum += arr[i]!
-    if (i >= win) sum -= arr[i - win]!
-    if (i + 1 >= win) out[i] = +(sum / win).toFixed(2)
-  }
-  return out
 }
