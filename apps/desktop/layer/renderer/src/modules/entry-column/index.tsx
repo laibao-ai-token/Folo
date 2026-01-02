@@ -15,6 +15,7 @@ import { FeedNotFound } from "~/components/errors/FeedNotFound"
 import { FEED_COLLECTION_LIST, HotkeyScope, ROUTE_FEED_PENDING } from "~/constants"
 import { useNavigateEntry } from "~/hooks/biz/useNavigateEntry"
 import { useRouteParams, useRouteParamsSelector } from "~/hooks/biz/useRouteParams"
+import { XhsTimeline } from "~/modules/xhs/XhsTimeline"
 import { useFeedQuery } from "~/queries/feed"
 import { useFeedHeaderTitle } from "~/store/feed/hooks"
 
@@ -134,6 +135,19 @@ function EntryColumnContent() {
   }, [actions, state.hasNextPage, state.isFetchingNextPage])
 
   const ListComponent = views.find((v) => v.view === view)?.gridMode ? EntryColumnGrid : EntryList
+
+  if (view === FeedViewType.Videos) {
+    // Repurpose the Videos view as Xiaohongshu recommendation page
+    return (
+      <Focusable
+        scope={HotkeyScope.Timeline}
+        data-hide-in-print
+        className="@container relative flex h-full flex-1 flex-col"
+      >
+        <XhsTimeline compact />
+      </Focusable>
+    )
+  }
 
   return (
     <Focusable

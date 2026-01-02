@@ -31,7 +31,7 @@ export const ViewSelectorRadioGroup = ({
 
   return (
     <Card className={rest.disabled ? "pointer-events-none" : void 0}>
-      <CardHeader className={cn("grid grid-cols-6 space-y-0 px-2 py-3", className)}>
+      <CardHeader className={cn("grid grid-cols-7 space-y-0 px-2 py-3", className)}>
         {views
           .filter((v) => v.switchable)
           .map((view) => (

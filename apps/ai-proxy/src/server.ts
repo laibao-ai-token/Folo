@@ -27,6 +27,8 @@ const IFLOW_BASE_URL =
 // Upstream Follow API for resolving context ("Current" entry content)
 const UPSTREAM_API_URL =
   process.env.UPSTREAM_API_URL || process.env.FOLLOW_API_URL || "https://api.follow.is"
+// Optional Xiaohongshu MCP HTTP API base URL (e.g. http://127.0.0.1:18060/api/v1)
+const XHS_API_BASE_URL = process.env.XHS_API_BASE_URL || ""
 
 const isReasoningModelId = (modelId: string): boolean =>
   (modelId.startsWith("o") || modelId.startsWith("gpt-5")) && !modelId.startsWith("gpt-5-chat")
@@ -74,6 +76,67 @@ app.use(
 
 // Health check
 app.get("/health", (c) => c.json({ ok: true }))
+
+// Xiaohongshu recommended feeds proxy (simple JSON passthrough)
+app.get("/xhs/feeds/recommended", async (c) => {
+  if (!XHS_API_BASE_URL) {
+    return c.json({ error: "XHS_API_BASE_URL is not configured" }, 500)
+  }
+
+  const limit = (c.req.query("limit") || "").trim()
+  const concurrency = (c.req.query("concurrency") || "").trim()
+
+  const base = XHS_API_BASE_URL.replace(/\/+$/, "")
+  const url = new URL(`${base}/feeds/list_with_detail`)
+  if (limit) url.searchParams.set("limit", limit)
+  if (concurrency) url.searchParams.set("concurrency", concurrency)
+
+  try {
+    const res = await fetch(url.toString(), {
+      headers: {
+        "Content-Type": "application/json",
+      },
+    })
+    const text = await res.text()
+    return c.body(text, res.status, {
+      "content-type": res.headers.get("content-type") || "application/json",
+    })
+  } catch (e: any) {
+    console.warn("[ai-proxy] /xhs/feeds/recommended error", e?.message || e)
+    return c.json({ error: "xhs recommended feeds proxy error" }, 502)
+  }
+})
+
+// Xiaohongshu search feeds proxy
+app.get("/xhs/feeds/search", async (c) => {
+  if (!XHS_API_BASE_URL) {
+    return c.json({ error: "XHS_API_BASE_URL is not configured" }, 500)
+  }
+
+  const keyword = (c.req.query("keyword") || "").trim()
+  if (!keyword) {
+    return c.json({ error: "keyword is required" }, 400)
+  }
+
+  const base = XHS_API_BASE_URL.replace(/\/+$/, "")
+  const url = new URL(`${base}/feeds/search`)
+  url.searchParams.set("keyword", keyword)
+
+  try {
+    const res = await fetch(url.toString(), {
+      headers: {
+        "Content-Type": "application/json",
+      },
+    })
+    const text = await res.text()
+    return c.body(text, res.status, {
+      "content-type": res.headers.get("content-type") || "application/json",
+    })
+  } catch (e: any) {
+    console.warn("[ai-proxy] /xhs/feeds/search error", e?.message || e)
+    return c.json({ error: "xhs search feeds proxy error" }, 502)
+  }
+})
 
 // Utility: build upstream headers with best-effort auth + tracing
 const buildUpstreamHeaders = (c: Context): Record<string, string> => {

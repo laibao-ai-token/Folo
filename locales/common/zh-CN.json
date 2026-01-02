@@ -34,7 +34,7 @@
   "feed_view_type.notifications": "通知",
   "feed_view_type.pictures": "图片",
   "feed_view_type.social_media": "社交媒体",
-  "feed_view_type.videos": "视频",
+  "feed_view_type.videos": "小红书",
   "finance.input.placeholder": "输入6位代码或带前缀，如 600000 或 sh600000",
   "finance.input.us.placeholder": "输入代码，如 AAPL / NVDA",
   "finance.kv.amount": "成交额(¥)",

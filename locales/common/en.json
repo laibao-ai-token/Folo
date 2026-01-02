@@ -34,7 +34,7 @@
   "feed_view_type.notifications": "Notifications",
   "feed_view_type.pictures": "Pictures",
   "feed_view_type.social_media": "Social Media",
-  "feed_view_type.videos": "Videos",
+  "feed_view_type.videos": "Xiaohongshu",
   "finance.input.placeholder": "Enter 6-digit code or with prefix, e.g. 600000 or sh600000",
   "finance.input.us.placeholder": "Enter symbol, e.g. AAPL / NVDA",
   "finance.kv.amount": "Turnover(CNY)",

@@ -34,7 +34,7 @@
   "feed_view_type.notifications": "通知",
   "feed_view_type.pictures": "画像",
   "feed_view_type.social_media": "ソーシャルメディア",
-  "feed_view_type.videos": "動画",
+  "feed_view_type.videos": "小紅書",
   "finance.input.placeholder": "6桁コードまたは接頭辞付き (例: 600000 / sh600000)",
   "finance.input.us.placeholder": "証券コード（例: AAPL / NVDA）",
   "finance.kv.amount": "売買代金(円)",

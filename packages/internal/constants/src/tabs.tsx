@@ -69,8 +69,9 @@ export const views: ViewDefinition[] = [
     switchable: true,
   },
   {
+    // Repurpose the Videos view as a dedicated Xiaohongshu view
     name: "feed_view_type.videos",
-    icon: <i className="i-mgc-video-cute-fi" />,
+    icon: <i className="i-mgc-book-6-cute-re" />,
     className: "text-red-600 dark:text-red-500",
     peerClassName: "peer-checked:text-red-600 peer-checked:dark:text-red-500",
     gridMode: true,
